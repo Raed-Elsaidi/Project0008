@@ -1,0 +1,15 @@
+{
+  "short_name": "ExamPortal",
+  "name": "نظام امتحانات الثانوية العامة",
+  "icons": [
+    {
+      "src": "/logo.png",
+      "sizes": "192x192",
+      "type": "image/png"
+    }
+  ],
+  "start_url": "/",
+  "display": "standalone",
+  "theme_color": "#0f172a",
+  "background_color": "#0f172a"
+}
