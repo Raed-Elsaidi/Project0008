@@ -2,6 +2,29 @@ import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { FaArrowRight, FaMessage, FaPaperclip, FaTrash, FaVolumeHigh, FaVolumeXmark, FaLock, FaIdCard, FaUserGraduate } from 'react-icons/fa6';
 
 const BUCKET = 'student-support-messages';
+
+// Supabase may wrap Edge Function failures in a generic fetch error. Read the
+// response body when available so the student sees the actual deployment/config error.
+async function explainEdgeFunctionError(error) {
+  const context = error?.context;
+  if (context && typeof context.clone === 'function') {
+    try {
+      const response = context.clone();
+      let payload;
+      try { payload = await response.json(); }
+      catch { payload = { error: await response.text().catch(() => '') }; }
+      const detail = payload?.error || payload?.message || payload?.msg;
+      if (detail) return `${detail} (HTTP ${response.status})`;
+      return `تعذر الوصول إلى دالة الدعم (HTTP ${response.status}).`;
+    } catch { /* fall through to generic diagnosis */ }
+  }
+  const message = String(error?.message || 'خطأ غير معروف');
+  if (/Failed to send a request to the Edge Function/i.test(message)) {
+    return 'تعذر الاتصال بدالة الدعم في Supabase. غالباً لم تُنشر الدالة submit-unregistered-support-request على مشروع Supabase الصحيح، أو أن عنوان Supabase/الاتصال غير صحيح. راجع سجل الدالة في Supabase ثم أعد المحاولة.';
+  }
+  return message;
+}
+
 const MAX_FILE_SIZE = 25 * 1024 * 1024;
 const toEnglishDigits = (value) => String(value ?? '').replace(/[٠-٩]/g, d => String('٠١٢٣٤٥٦٧٨٩'.indexOf(d))).replace(/[۰-۹]/g, d => String('۰۱۲۳۴۵۶۷۸۹'.indexOf(d)));
 const styles = {
@@ -110,7 +133,7 @@ export default function SupportCenter({ onBack, supabase, student }) {
    if(error)throw error;
    if(!data?.ok)throw new Error(data?.error||'لم يؤكد الخادم حفظ الرسالة.');
    setSubject('');setBody('');setAttachment(null);setView('sent');setNotice(`تم إرسال رسالتك بنجاح. رقم الرسالة: ${data.request_id} ✓`);await loadMessages();
-  }catch(error){setNotice(`تعذر إرسال الرسالة: ${error?.message||'تحقق من نشر دالة الدعم وإعدادات Supabase.'}`);}
+  }catch(error){setNotice(`تعذر إرسال الرسالة: ${await explainEdgeFunctionError(error)}`);}
   finally{setSending(false);}
  };
  const sendUnregisteredRequest=async()=>{
@@ -130,7 +153,7 @@ export default function SupportCenter({ onBack, supabase, student }) {
    if(error) throw error;
    if(!data?.ok) throw new Error(data?.error||'لم يؤكد الخادم حفظ الطلب.');
    setBody('');setAttachment(null);setNotice(`تم إرسال طلب الدعم بنجاح. رقم الطلب: ${data.request_id} ✓`);
-  }catch(error){setNotice(`تعذر إرسال الطلب: ${error?.message||'تحقق من نشر الدالة وإعدادات Supabase.'}`);}
+  }catch(error){setNotice(`تعذر إرسال الطلب: ${await explainEdgeFunctionError(error)}`);}
   finally{setSending(false);}
  };
  const openAttachment=async m=>{if(!m.attachment_path)return;const {data,error}=await supabase.storage.from(BUCKET).createSignedUrl(m.attachment_path,300);if(error){setNotice('تعذر فتح المرفق؛ تحقق من صلاحيات التخزين.');return;}window.open(data.signedUrl,'_blank','noopener,noreferrer');};
