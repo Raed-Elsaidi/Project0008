@@ -99,7 +99,7 @@ export default function App() {
       )}
 
       {currentScreen === 'readiness' && (
-        <DeviceReadiness supabase={supabase} student={userData} onBack={() => setCurrentScreen('support')} />
+        <DeviceReadiness supabase={supabase} student={userData} onBack={() => setCurrentScreen('examPortal')} />
       )}
 
       {currentScreen === 'biometricGate' && (
