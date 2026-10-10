@@ -49,7 +49,10 @@ Deno.serve(async (req: Request) => {
       let query = admin.from("student_support_messages").select("id,student_id,national_id,audience,sender_type,subject,message,attachment_path,attachment_name,attachment_mime,attachment_size,delivered_at,is_read,read_at,sender_deleted_at,recipient_deleted_at,created_at").order("created_at", { ascending: false }).limit(100);
       query = audience === "registered" ? query.eq("student_id", studentId) : query.eq("national_id", nationalId).eq("audience", "unregistered");
       const { data, error } = await query;
-      if (error) return json({ ok: false, error: "تعذر تحميل الرسائل. تحقق من بنية جدول المراسلات." }, 500);
+      if (error) {
+        console.error("support mailbox list failed", { code: error.code, message: error.message, details: error.details, hint: error.hint });
+        return json({ ok: false, error: `تعذر تحميل الرسائل: ${error.message || "خطأ في جدول المراسلات"}. شغّل ترحيلات قاعدة البيانات الخاصة بالمراسلات ثم أعد نشر الدالة.` }, 500);
+      }
       return json({ ok: true, messages: data ?? [] });
     }
 

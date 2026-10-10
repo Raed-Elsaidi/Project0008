@@ -72,8 +72,8 @@ export default function WelcomeScreen({
       .home-card-icon { grid-column:2; grid-row:1 / span 2; display:flex; align-items:center; justify-content:center; color:var(--card-color); font-size:clamp(48px,5vw,70px); filter:drop-shadow(0 0 12px var(--card-glow)); transition:transform .32s ease,filter .32s ease; }
       .home-card:hover .home-card-icon,.home-card.is-hovered .home-card-icon { transform:scale(1.12) translateY(-3px); filter:drop-shadow(0 0 20px var(--card-color)); }
       .home-card-copy { grid-column:1; grid-row:1 / span 2; position:relative; z-index:1; }
-      .home-card-title { font-size:clamp(17px,1.7vw,25px); font-weight:950; margin-bottom:7px; }
-      .home-card-desc { color:#e2eaf6; font-size:clamp(12px,1.15vw,16px); line-height:1.9; }
+      .home-card-title { display:block; font-size:clamp(17px,1.7vw,25px); font-weight:950; margin-bottom:7px; }
+      .home-card-desc { display:block; color:#e2eaf6; font-size:clamp(12px,1.15vw,16px); line-height:1.9; }
       .home-card-arrow { position:absolute; bottom:13px; left:13px; width:42px; height:42px; display:grid; place-items:center; border:2px solid var(--card-color); border-radius:50%; color:#fff; font-size:20px; transition:transform .32s ease,background .32s ease,box-shadow .32s ease; }
       .home-card:hover .home-card-arrow,.home-card.is-hovered .home-card-arrow { background:var(--card-color); transform:translateX(-4px); box-shadow:0 0 18px var(--card-glow); }
       .home-footer { position:relative; z-index:1; width:min(1050px,94vw); margin:22px auto 0; padding:12px 18px; display:flex; align-items:center; justify-content:center; gap:20px; flex-wrap:wrap; color:#fff; background:rgba(1,12,44,.78); border:1px solid rgba(0,153,255,.65); border-radius:24px; }
