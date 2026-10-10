@@ -1,6 +1,7 @@
 import React, { useState } from 'react';
 import { supabase } from './supabaseClient';
 import WelcomeScreen from './WelcomeScreen';
+import ExamPortalScreen from './ExamPortalScreen';
 import Login from './Login';
 import Register from './Register';
 import Exam from './exam';
@@ -30,7 +31,7 @@ export default function App() {
     <div className="app-main-wrapper" style={{ minHeight: '100vh', backgroundColor: '#f8fafc' }}>
       {currentScreen === 'welcome' && (
         <WelcomeScreen
-          onNavigateExam={() => setCurrentScreen('login')}
+          onNavigateExamPortal={() => setCurrentScreen('examPortal')}
           onNavigateResult={() => setCurrentScreen('result')}
           onNavigateRegister={() => setCurrentScreen('register')}
           onNavigatePassword={() => setCurrentScreen('password')}
@@ -39,6 +40,16 @@ export default function App() {
           onNavigateSupport={() => { setSupportReturn('welcome'); setCurrentScreen('support'); }}
           onNavigateGuides={() => setCurrentScreen('guides')}
           onNavigateNotifications={() => setCurrentScreen('notifications')}
+          onNavigateReadiness={() => setCurrentScreen('readiness')}
+        />
+      )}
+
+      {currentScreen === 'examPortal' && (
+        <ExamPortalScreen
+          onBackHome={() => setCurrentScreen('welcome')}
+          onNavigateExam={() => setCurrentScreen('login')}
+          onNavigateResult={() => setCurrentScreen('result')}
+          onNavigatePassword={() => setCurrentScreen('password')}
           onNavigateReadiness={() => setCurrentScreen('readiness')}
         />
       )}
