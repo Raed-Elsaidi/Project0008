@@ -31,6 +31,7 @@ export default function Exam({
 
   const [currentQuestion, setCurrentQuestion] = useState(0);
   const [reviewQuestions, setReviewQuestions] = useState([]);
+  const [reviewedQuestions, setReviewedQuestions] = useState([]);
 
   const [showSubmitModal, setShowSubmitModal] = useState(false);
 
@@ -1691,31 +1692,21 @@ export default function Exam({
   // REVIEW
   // =========================================================
 
-  const toggleReview =
-    (questionId) => {
-      setReviewQuestions(
-        (prev) => {
-          const id =
-            String(
-              questionId
-            );
-
-          if (
-            prev.includes(id)
-          ) {
-            return prev.filter(
-              (item) =>
-                item !== id
-            );
-          }
-
-          return [
-            ...prev,
-            id
-          ];
-        }
-      );
-    };
+  // دورة علامة المراجعة: مراجعة (أصفر) ثم تمت المراجعة (أخضر) ثم العودة للوضع العادي.
+  const toggleReview = (questionId) => {
+    const id = String(questionId);
+    if (reviewQuestions.includes(id)) {
+      setReviewQuestions(prev => prev.filter(item => item !== id));
+      setReviewedQuestions(prev => prev.includes(id) ? prev : [...prev, id]);
+      return;
+    }
+    if (reviewedQuestions.includes(id)) {
+      setReviewedQuestions(prev => prev.filter(item => item !== id));
+      return;
+    }
+    setReviewedQuestions(prev => prev.filter(item => item !== id));
+    setReviewQuestions(prev => prev.includes(id) ? prev : [...prev, id]);
+  };
 
   // =========================================================
   // LOGICAL EXAM COUNTS
@@ -2912,8 +2903,8 @@ export default function Exam({
               }}
             >
               {isReview
-                ? '★ تمت المراجعة'
-                : '☆ وضع علامة للمراجعة'}
+                ? 'تمت المراجعة'
+                : 'مراجعة'}
             </button>
           </div>
 
@@ -3858,21 +3849,23 @@ export default function Exam({
                         style={{
                           padding:
                             '10px',
-                          border:
-                            review
-                              ? '2px solid #f59e0b'
-                              : index ===
-                                currentQuestion
-                              ? '2px solid #60a5fa'
-                              : '1px solid #334155',
-                          backgroundColor:
-                            answered
-                              ? '#064e3b'
-                              : '#0f172a',
-                          color:
-                            answered
-                              ? '#34d399'
-                              : '#cbd5e1',
+                          border: review
+                            ? '2px solid #f59e0b'
+                            : reviewedQuestions.includes(String(q.id))
+                            ? '2px solid #22c55e'
+                            : answered
+                            ? '2px solid #22c55e'
+                            : '2px solid #ef4444',
+                          backgroundColor: review
+                            ? 'rgba(245,158,11,0.14)'
+                            : (reviewedQuestions.includes(String(q.id)) || answered)
+                            ? 'rgba(34,197,94,0.12)'
+                            : 'rgba(239,68,68,0.08)',
+                          color: review
+                            ? '#fbbf24'
+                            : (reviewedQuestions.includes(String(q.id)) || answered)
+                            ? '#4ade80'
+                            : '#f87171',
                           borderRadius:
                             '6px',
                           cursor:

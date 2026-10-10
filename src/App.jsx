@@ -1,7 +1,6 @@
 import React, { useState } from 'react';
 import { supabase } from './supabaseClient';
 import WelcomeScreen from './WelcomeScreen';
-import ExamPortalMenu from './ExamPortalMenu';
 import Login from './Login';
 import Register from './Register';
 import Exam from './exam';
@@ -10,6 +9,8 @@ import Password from './password';
 import StudentProfile from './StudentProfile';
 import NotesBook from './NotesBook';
 import SupportCenter from './SupportCenter';
+import StudentGuides from './StudentGuides';
+import StudentNotifications from './StudentNotifications';
 import DeviceReadiness from './DeviceReadiness';
 import PreExamBiometricGate from './PreExamBiometricGate';
 
@@ -29,19 +30,16 @@ export default function App() {
     <div className="app-main-wrapper" style={{ minHeight: '100vh', backgroundColor: '#f8fafc' }}>
       {currentScreen === 'welcome' && (
         <WelcomeScreen
-          onNavigateExamPortal={() => setCurrentScreen('examPortal')}
-          onNavigateRegister={() => setCurrentScreen('register')}
-          onNavigateSupport={() => { setSupportReturn('welcome'); setCurrentScreen('support'); }}
-        />
-      )}
-
-      {currentScreen === 'examPortal' && (
-        <ExamPortalMenu
           onNavigateExam={() => setCurrentScreen('login')}
           onNavigateResult={() => setCurrentScreen('result')}
+          onNavigateRegister={() => setCurrentScreen('register')}
           onNavigatePassword={() => setCurrentScreen('password')}
-          onNavigateReadiness={() => { setSupportReturn('examPortal'); setCurrentScreen('readiness'); }}
-          onBack={() => setCurrentScreen('welcome')}
+          onNavigateProfile={() => setCurrentScreen('studentProfile')}
+          onNavigateNotes={() => setCurrentScreen('notes')}
+          onNavigateSupport={() => { setSupportReturn('welcome'); setCurrentScreen('support'); }}
+          onNavigateGuides={() => setCurrentScreen('guides')}
+          onNavigateNotifications={() => setCurrentScreen('notifications')}
+          onNavigateReadiness={() => setCurrentScreen('readiness')}
         />
       )}
 
@@ -57,7 +55,7 @@ export default function App() {
             });
             setCurrentScreen('biometricGate');
           }}
-          onBackHome={() => setCurrentScreen('examPortal')}
+          onBackHome={() => setCurrentScreen('welcome')}
         />
       )}
 
@@ -70,7 +68,7 @@ export default function App() {
       )}
 
       {currentScreen === 'password' && (
-        <Password supabase={supabase} onBack={() => setCurrentScreen('examPortal')} />
+        <Password supabase={supabase} onBack={() => setCurrentScreen('welcome')} />
       )}
 
       {currentScreen === 'studentProfile' && (
@@ -78,11 +76,19 @@ export default function App() {
       )}
 
       {currentScreen === 'support' && (
-        <SupportCenter onBack={() => setCurrentScreen(supportReturn)} />
+        <SupportCenter supabase={supabase} student={userData} onBack={() => setCurrentScreen(supportReturn)} onReadiness={() => setCurrentScreen('readiness')} />
+      )}
+
+      {currentScreen === 'guides' && (
+        <StudentGuides onBack={() => setCurrentScreen('welcome')} />
+      )}
+
+      {currentScreen === 'notifications' && (
+        <StudentNotifications onBack={() => setCurrentScreen('welcome')} />
       )}
 
       {currentScreen === 'readiness' && (
-        <DeviceReadiness supabase={supabase} student={userData} onBack={() => setCurrentScreen(supportReturn)} />
+        <DeviceReadiness supabase={supabase} student={userData} onBack={() => setCurrentScreen('support')} />
       )}
 
       {currentScreen === 'biometricGate' && (
@@ -103,7 +109,7 @@ export default function App() {
       )}
 
       {currentScreen === 'result' && (
-        <Result supabase={supabase} studentData={userData} onBack={() => setCurrentScreen('examPortal')} />
+        <Result supabase={supabase} studentData={userData} onBack={() => setCurrentScreen('welcome')} />
       )}
     </div>
   );

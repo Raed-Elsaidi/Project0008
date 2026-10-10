@@ -366,6 +366,16 @@ export default function Result({ supabase, onBack = () => {} }) {
         border-radius: 10px;
       }
 
+      @media (max-width: 600px) {
+        .result-page-print { padding: 12px !important; }
+        .result-main-card { padding: 16px 13px !important; border-radius: 20px !important; }
+        .result-main-card > div:first-child { gap: 10px !important; }
+        .result-main-card button { touch-action: manipulation; }
+      }
+
+      .result-main-card button:hover { filter: brightness(1.08); }
+      .result-main-card button:active { transform: scale(.98); }
+
       @media print {
         html, body {
           width: 210mm;
@@ -434,24 +444,34 @@ export default function Result({ supabase, onBack = () => {} }) {
     <div dir="rtl" className="result-page-print" style={styles.page}>
       <div className="result-main-card" style={styles.card}>
         <div style={styles.header}>
-          <div>
+          <div style={styles.headerIdentity}>
+            <div style={styles.bismillahMain}>بسم الله الرحمن الرحيم</div>
+            <div style={styles.mainLogo} aria-label="شعار المؤسسة">
+              <img
+                src={institutionLogo(institution) || logo}
+                alt="شعار المؤسسة"
+                style={{ width: '100%', height: '100%', objectFit: 'contain', display: 'block' }}
+                onError={e => { e.currentTarget.style.display = 'none'; }}
+              />
+            </div>
             <div style={styles.ministry}>{institutionName(institution)}</div>
             <div style={styles.sub}>قسم القياس والتقويم والامتحانات</div>
           </div>
           <button onClick={onBack} style={styles.home}>🏠 الرئيسية</button>
         </div>
 
-        <h1 style={styles.title}>📊 عرض النتائج والشهادات المدرسية</h1>
+        <h1 style={styles.title}>عرض النتائج والشهادات المدرسية</h1>
         <p style={styles.hint}>ابحث برقم الجلوس أو رقم الهوية لعرض النتيجة والشهادة الرسمية</p>
-        
-        <form onSubmit={submitSearch} style={styles.searchRow}>
+
+        <form onSubmit={submitSearch} style={styles.searchForm}>
           <input
             value={query}
             onChange={e => setQuery(englishDigits(e.target.value).slice(0, 10))}
             inputMode="numeric"
             maxLength={10}
             dir="ltr"
-            placeholder="أدخل رقم الجلوس (10) أو رقم الهوية (9)..."
+            placeholder="أدخل رقم الجلوس أو رقم الهوية"
+            aria-label="رقم الجلوس أو رقم الهوية"
             style={{ ...styles.input, direction: 'ltr', textAlign: 'center', fontVariantNumeric: 'tabular-nums' }}
           />
           <button type="submit" style={styles.searchBtn}>🔎 بحث</button>
@@ -676,15 +696,18 @@ export default function Result({ supabase, onBack = () => {} }) {
 const styles = {
   page: { minHeight: '100vh', padding: '24px', background: '#07152f', color: '#eef7ff', boxSizing: 'border-box', fontFamily: 'Noto Kufi Arabic, sans-serif' },
   card: { width: 'min(1250px,100%)', margin: '0 auto', background: 'rgba(9,28,60,.9)', border: '1px solid rgba(56,189,248,.35)', borderRadius: 20, boxShadow: '0 0 40px rgba(0,0,0,.35)', padding: 22, boxSizing: 'border-box' },
-  header: { display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 15, borderBottom: '1px solid rgba(96,165,250,.25)', paddingBottom: 14 },
-  ministry: { fontWeight: 900, fontSize: 16 },
-  sub: { fontSize: 11, color: '#93c5fd', marginTop: 4 },
-  home: { background: '#0e7490', color: '#fff', border: '1px solid #38bdf8', borderRadius: 9, padding: '9px 15px', cursor: 'pointer', fontWeight: 800 },
-  title: { textAlign: 'center', color: '#38bdf8', margin: '22px 0 5px', fontSize: 27 },
-  hint: { textAlign: 'center', color: '#cbd5e1', margin: '0 0 18px' },
-  searchRow: { display: 'flex', gap: 10, maxWidth: 760, margin: '0 auto 20px' },
-  input: { flex: 1, minWidth: 0, padding: '13px 15px', borderRadius: 10, border: '1px solid #2563eb', background: '#06142c', color: '#fff', outline: 'none', fontSize: 15 },
-  searchBtn: { border: 0, borderRadius: 10, padding: '0 25px', background: '#2563eb', color: '#fff', fontWeight: 900, cursor: 'pointer' },
+  header: { display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: 15, borderBottom: '1px solid rgba(96,165,250,.25)', paddingBottom: 18, position: 'relative' },
+  headerIdentity: { flex: 1, minWidth: 0, textAlign: 'center' },
+  bismillahMain: { fontWeight: 800, fontSize: 16, lineHeight: 1.6, color: '#dbeafe', marginBottom: 8 },
+  mainLogo: { width: 76, height: 76, margin: '0 auto 8px', display: 'flex', alignItems: 'center', justifyContent: 'center' },
+  ministry: { fontWeight: 900, fontSize: 20, lineHeight: 1.7, color: '#f8fafc' },
+  sub: { fontSize: 12, color: '#93c5fd', marginTop: 4 },
+  home: { background: '#0e7490', color: '#fff', border: '1px solid #38bdf8', borderRadius: 9, padding: '9px 15px', cursor: 'pointer', fontWeight: 800, flexShrink: 0 },
+  title: { textAlign: 'center', color: '#38bdf8', margin: '24px 0 8px', fontSize: 'clamp(23px, 4vw, 34px)', lineHeight: 1.6, fontWeight: 900 },
+  hint: { textAlign: 'center', color: '#cbd5e1', margin: '0 auto 22px', maxWidth: 720, fontSize: 'clamp(15px, 2.4vw, 20px)', lineHeight: 1.9 },
+  searchForm: { display: 'flex', flexDirection: 'column', gap: 12, maxWidth: 560, width: '100%', margin: '0 auto 20px' },
+  input: { width: '100%', minWidth: 0, boxSizing: 'border-box', padding: '14px 15px', borderRadius: 12, border: '1px solid #2563eb', background: '#06142c', color: '#fff', outline: 'none', fontSize: 17, minHeight: 54 },
+  searchBtn: { width: '100%', minHeight: 52, border: 0, borderRadius: 12, padding: '12px 25px', background: '#2563eb', color: '#fff', fontWeight: 900, fontSize: 17, cursor: 'pointer', transition: 'transform .2s ease, box-shadow .2s ease' },
   resultBox: { background: 'rgba(6,20,44,.85)', border: '1px solid #38bdf8', borderRadius: 14, padding: 18, marginBottom: 24 },
   state: { padding: 30, textAlign: 'center', color: '#cbd5e1' },
   error: { padding: 14, borderRadius: 10, background: 'rgba(127,29,29,.35)', border: '1px solid #ef4444', color: '#fecaca', marginBottom: 18 },

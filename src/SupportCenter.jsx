@@ -1,69 +1,46 @@
-import React from 'react';
-import { FaArrowRight, FaMessage } from 'react-icons/fa6';
-
-export default function SupportCenter({ onBack }) {
-  return (
-    <div dir="rtl" style={{
-      minHeight:'100vh',
-      padding:20,
-      background:'#f8fafc',
-      fontFamily:'Tahoma,Arial'
-    }}>
-      <div style={{
-        maxWidth:760,
-        margin:'40px auto',
-        background:'#fff',
-        padding:25,
-        borderRadius:20,
-        boxShadow:'0 15px 45px rgba(9,43,76,.10)',
-        border:'1px solid #e4edf4'
-      }}>
-        <button
-          onClick={onBack}
-          style={{
-            display:'inline-flex',
-            alignItems:'center',
-            gap:8,
-            padding:'9px 14px',
-            border:'1px solid #d8e3ec',
-            borderRadius:10,
-            background:'#fff',
-            color:'#092b4c',
-            fontWeight:700,
-            cursor:'pointer'
-          }}
-        >
-          <FaArrowRight/> الرئيسية
-        </button>
-
-        <h2 style={{textAlign:'center',color:'#092b4c',margin:'24px 0 8px'}}>
-          🛠️ الدعم الفني
-        </h2>
-        <p style={{textAlign:'center',color:'#64748b',lineHeight:1.8,marginBottom:22}}>
-          تواصل مع فريق الدعم الفني للاستفسارات والمشكلات المتعلقة بالبوابة والامتحانات.
-        </p>
-
-        <div style={{display:'grid',gap:14}}>
-          <button style={{
-            display:'flex',
-            alignItems:'center',
-            gap:15,
-            textAlign:'right',
-            padding:20,
-            border:'1px solid #dbeafe',
-            borderRadius:16,
-            background:'#f8fbff',
-            color:'#123b67',
-            cursor:'pointer'
-          }}>
-            <FaMessage size={28}/>
-            <span>
-              <b style={{display:'block',marginBottom:5}}>الاستفسارات والشكاوى</b>
-              <small style={{color:'#64748b'}}>التواصل مع فريق الدعم الفني وطرح المشكلة أو الاستفسار.</small>
-            </span>
-          </button>
-        </div>
-      </div>
-    </div>
-  );
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { FaArrowRight, FaDesktop, FaMessage, FaPaperclip, FaPaperPlane, FaInbox, FaRegPaperPlane, FaTrash, FaBell, FaVolumeHigh, FaVolumeXmark } from 'react-icons/fa6';
+const BUCKET = 'student-support-messages';
+const MAX_FILE_SIZE = 25 * 1024 * 1024;
+const styles = {
+ page:{minHeight:'100vh',padding:'22px 14px',background:'radial-gradient(circle at top,#173b69,#071326 70%)',fontFamily:'Tahoma,Arial',color:'#f8fafc'},
+ wrap:{maxWidth:1000,margin:'0 auto'}, back:{padding:'9px 14px',border:'1px solid #526b8a',borderRadius:10,background:'#142b48',color:'#fff',cursor:'pointer'},
+ panel:{marginTop:18,padding:20,border:'1px solid #29496b',borderRadius:18,background:'#0c1e35',boxShadow:'0 15px 40px #0004'},
+ tab:{padding:'10px 13px',border:'1px solid #345777',borderRadius:10,background:'#132b49',color:'#dbeafe',cursor:'pointer',fontWeight:700},
+ input:{width:'100%',boxSizing:'border-box',padding:12,border:'1px solid #31557b',borderRadius:10,background:'#07162b',color:'#fff',marginTop:6},
+ button:{padding:'11px 16px',border:0,borderRadius:10,background:'#0891b2',color:'#fff',fontWeight:800,cursor:'pointer'},
+ card:{padding:14,border:'1px solid #29496b',borderRadius:12,background:'#102641',cursor:'pointer',textAlign:'right',color:'#f8fafc'},
+};
+export default function SupportCenter({ onBack, onReadiness, supabase, student }) {
+ const [audience,setAudience]=useState(student?.id?'registered':'registered'); const [unregisteredId,setUnregisteredId]=useState(''); const [unregisteredType,setUnregisteredType]=useState('عدم التسجيل'); const [unregisteredDetails,setUnregisteredDetails]=useState(''); const [unregisteredFile,setUnregisteredFile]=useState(null);
+ const [view,setView]=useState('inbox'); const [messages,setMessages]=useState([]); const [selected,setSelected]=useState(null);
+ const [subject,setSubject]=useState(''); const [body,setBody]=useState(''); const [attachment,setAttachment]=useState(null);
+ const [loading,setLoading]=useState(false); const [sending,setSending]=useState(false); const [notice,setNotice]=useState('');
+ const [soundOn,setSoundOn]=useState(true); const [volume,setVolume]=useState(0.5); const [unread,setUnread]=useState(0); const audioRef=useRef(null); const lastIds=useRef(new Set());
+ const studentId=student?.id;
+ const playSound=useCallback(()=>{if(!soundOn)return;try{const Ctx=window.AudioContext||window.webkitAudioContext;if(!Ctx)return;const ctx=new Ctx();const osc=ctx.createOscillator();const gain=ctx.createGain();osc.type='sine';osc.frequency.value=740;gain.gain.value=Math.max(0,Math.min(1,volume))*0.12;osc.connect(gain);gain.connect(ctx.destination);osc.start();osc.stop(ctx.currentTime+.14);osc.onended=()=>ctx.close();}catch{}},[soundOn,volume]);
+ const loadMessages=useCallback(async({silent=false}={})=>{
+   if(!supabase||!studentId)return;
+   if(!silent)setLoading(true);
+   try{const {data,error}=await supabase.from('student_support_messages').select('*').eq('student_id',studentId).order('created_at',{ascending:false});if(error)throw error;
+     const next=data||[];const ids=new Set(next.filter(m=>m.sender_type==='support').map(m=>String(m.id)));
+     if(silent&&lastIds.current.size){const hasNew=[...ids].some(id=>!lastIds.current.has(id));if(hasNew)playSound();}
+     lastIds.current=ids;setMessages(next);setUnread(next.filter(m=>m.sender_type==='support'&&!m.is_read).length);
+   }catch(e){setNotice('تعذر تحميل الرسائل. تأكد من إعداد صلاحيات جدول الدعم الفني في Supabase.');}
+   finally{if(!silent)setLoading(false);}
+ },[supabase,studentId,playSound]);
+ useEffect(()=>{loadMessages();if(!supabase||!studentId)return;const channel=supabase.channel(`student-support-inbox-${studentId}`).on('postgres_changes',{event:'INSERT',schema:'public',table:'student_support_messages',filter:`student_id=eq.${studentId}`},()=>loadMessages({silent:true})).subscribe();const timer=setInterval(()=>loadMessages({silent:true}),30000);return()=>{clearInterval(timer);supabase.removeChannel(channel);};},[loadMessages,supabase,studentId]);
+ const visible=useMemo(()=>messages.filter(m=>view==='inbox'?m.sender_type==='support'&&!m.recipient_deleted_at:view==='sent'?m.sender_type==='student'&&!m.sender_deleted_at:Boolean(m.sender_deleted_at||m.recipient_deleted_at)),[messages,view]);
+ const markRead=async m=>{setSelected(m);if(m.sender_type==='support'&&!m.is_read){const {error}=await supabase.from('student_support_messages').update({is_read:true,read_at:new Date().toISOString()}).eq('id',m.id);if(!error){setMessages(prev=>prev.map(x=>x.id===m.id?{...x,is_read:true}:x));setUnread(n=>Math.max(0,n-1));}}};
+ const send=async()=>{if(!studentId){setNotice('لإرسال الرسائل ومتابعة الردود، سجّل الدخول أولاً من بوابة الامتحانات.');return;}if(!subject.trim()||(!body.trim()&&!attachment)){setNotice('أدخل عنوان الرسالة واكتب التفاصيل أو أرفق ملفاً.');return;}if(attachment&&attachment.size>MAX_FILE_SIZE){setNotice('حجم المرفق الأقصى 25 ميجابايت.');return;}setSending(true);setNotice('');try{let path=null,name=null,mime=null,size=null;if(attachment){const safe=attachment.name.replace(/[^a-zA-Z0-9._\-\u0600-\u06FF]/g,'_');path=`student/${studentId}/${Date.now()}_${safe}`;const up=await supabase.storage.from(BUCKET).upload(path,attachment,{upsert:false,contentType:attachment.type||undefined});if(up.error)throw up.error;name=attachment.name;mime=attachment.type||'application/octet-stream';size=attachment.size;}const payload={student_id:studentId,sender_type:'student',sender_employee_id:null,subject:subject.trim(),message:body.trim(),attachment_path:path,attachment_name:name,attachment_mime:mime,attachment_size:size,delivered_at:new Date().toISOString(),is_read:false,read_at:null,sender_deleted_at:null,recipient_deleted_at:null};const {error}=await supabase.from('student_support_messages').insert(payload);if(error)throw error;setSubject('');setBody('');setAttachment(null);setView('sent');setNotice('تم إرسال رسالتك بنجاح. يمكنك متابعة الرد من صندوق الوارد. ✓');await loadMessages();}catch(e){setNotice(`تعذر إرسال الرسالة: ${e?.message||'تحقق من اتصالك وصلاحيات Supabase.'}`);}finally{setSending(false);}};
+ const openAttachment=async m=>{if(!m.attachment_path)return;const {data,error}=await supabase.storage.from(BUCKET).createSignedUrl(m.attachment_path,300);if(error){setNotice('تعذر فتح المرفق؛ تحقق من صلاحيات التخزين.');return;}window.open(data.signedUrl,'_blank','noopener,noreferrer');};
+ const removeMessage=async m=>{const field=m.sender_type==='student'?'sender_deleted_at':'recipient_deleted_at';const {error}=await supabase.from('student_support_messages').update({[field]:new Date().toISOString()}).eq('id',m.id);if(error){setNotice('تعذر نقل الرسالة إلى سلة المحذوفات.');return;}setSelected(null);await loadMessages();};
+ return <main dir="rtl" style={styles.page}><div style={styles.wrap}><button onClick={onBack} style={styles.back}><FaArrowRight/> الرئيسية</button><header style={{textAlign:'center',padding:'20px 0 8px'}}><FaMessage size={38} color="#67e8f9"/><h1 style={{margin:'10px 0'}}>الدعم الفني</h1><p style={{color:'#cbd5e1',margin:0}}>المراسلات والاستفسارات ومتابعة الردود</p></header>
+ <section style={styles.panel}><div style={{display:'grid',gridTemplateColumns:'repeat(auto-fit,minmax(220px,1fr))',gap:10,marginBottom:18}}><button type="button" onClick={()=>setAudience('registered')} style={{...styles.tab,background:audience==='registered'?'linear-gradient(110deg,#0759ff,#4c1d95)':'#102641',borderColor:audience==='registered'?'#38bdf8':'#345777',boxShadow:audience==='registered'?'0 0 18px #2563eb66':'none'}}>👤 الطلاب المسجلون</button><button type="button" onClick={()=>setAudience('unregistered')} style={{...styles.tab,background:audience==='unregistered'?'linear-gradient(110deg,#0759ff,#4c1d95)':'#102641',borderColor:audience==='unregistered'?'#38bdf8':'#345777',boxShadow:audience==='unregistered'?'0 0 18px #2563eb66':'none'}}>🪪 الطلاب غير المسجلين</button></div>{audience==='unregistered'?<div style={{display:'grid',gap:14}}><div style={{padding:16,border:'1px solid #2563eb',borderRadius:14,background:'linear-gradient(135deg,#0b2344,#101638)'}}><h2 style={{margin:'0 0 6px',color:'#67e8f9'}}>طلب دعم للطلاب غير المسجلين</h2><p style={{margin:0,color:'#cbd5e1',lineHeight:1.8}}>أدخل رقم الهوية وحدد المشكلة واكتب التفاصيل؛ لا تُعرض الردود الخاصة قبل التحقق الآمن من الهوية.</p></div><label>رقم الهوية<input value={unregisteredId} onChange={e=>setUnregisteredId(e.target.value)} style={styles.input} inputMode="numeric" placeholder="أدخل رقم الهوية" /></label><label>نوع المشكلة<select value={unregisteredType} onChange={e=>setUnregisteredType(e.target.value)} style={styles.input}><option>عدم التسجيل</option><option>نسيت رقم الجلوس</option></select></label><label>تفاصيل المشكلة<textarea value={unregisteredDetails} onChange={e=>setUnregisteredDetails(e.target.value)} style={{...styles.input,minHeight:130,resize:'vertical'}} placeholder="اكتب تفاصيل المشكلة بوضوح…" /></label><label style={{display:'flex',alignItems:'center',gap:8,flexWrap:'wrap'}}>📎 إرفاق ملف (اختياري)<input type="file" onChange={e=>setUnregisteredFile(e.target.files?.[0]||null)} /></label>{unregisteredFile&&<small style={{color:'#a5f3fc'}}>{unregisteredFile.name}</small>}<button type="button" onClick={()=>setNotice(!unregisteredId.trim()||!unregisteredDetails.trim()?'أدخل رقم الهوية وتفاصيل المشكلة أولاً.':'واجهة الطلب جاهزة، لكن الإرسال الفعلي يحتاج نقطة API آمنة للتحقق من الهوية وربطها بقاعدة البيانات.') } style={styles.button}>إرسال طلب الدعم</button>{notice&&<div role="status" style={{padding:12,borderRadius:10,background:'#3a2c12',color:'#fde68a',lineHeight:1.8}}>{notice}</div>}</div>:<> <button onClick={onReadiness} style={{...styles.card,display:'flex',alignItems:'center',gap:12,width:'100%',marginBottom:16}}><FaDesktop size={25} color="#67e8f9"/><span><b>فحص جاهزية الجهاز للامتحان</b><small style={{display:'block',color:'#cbd5e1',marginTop:5}}>الكاميرا والميكروفون والإنترنت والمتصفح</small></span></button>
+ <div style={{display:'flex',gap:8,flexWrap:'wrap',alignItems:'center',marginBottom:16}}>{[['inbox','📥 الوارد'],['sent','📤 المرسل'],['trash','🗑️ المحذوفات'],['compose','✉️ رسالة جديدة']].map(([v,label])=><button key={v} onClick={()=>{setView(v);setSelected(null);setNotice('');}} style={{...styles.tab,...(view===v?{background:'#075985',borderColor:'#38bdf8'}:{})}}>{label}{v==='inbox'&&unread>0&&<b style={{background:'#dc2626',borderRadius:99,padding:'2px 7px',marginRight:4}}>{unread}</b>}</button>)}<button onClick={()=>setSoundOn(x=>!x)} title="تشغيل أو كتم صوت الرسائل" style={{...styles.tab,marginRight:'auto'}}>{soundOn?<FaVolumeHigh/>:<FaVolumeXmark/>} الصوت</button><label style={{display:'flex',alignItems:'center',gap:6,color:'#cbd5e1',fontSize:12}}>مستوى الصوت <input type="range" min="0" max="1" step="0.1" value={volume} onChange={e=>setVolume(Number(e.target.value))} aria-label="مستوى صوت التنبيهات"/></label><button onClick={()=>loadMessages()} style={styles.tab}>تحديث ↻</button></div>
+ {notice&&<div role="status" style={{padding:12,borderRadius:10,background:'#123c43',color:'#d1fae5',marginBottom:14,lineHeight:1.7}}>{notice}</div>}
+ {!studentId&&<div style={{padding:15,borderRadius:12,background:'#3a2c12',color:'#fde68a',lineHeight:1.8,marginBottom:15}}>لمتابعة المراسلات الخاصة، يجب تسجيل الدخول أولاً. لا نعرض الردود اعتماداً على رقم الهوية وحده حفاظاً على خصوصية الطالب.</div>}
+ {view==='compose'&&<div style={{display:'grid',gap:12}}><label>عنوان الرسالة<input value={subject} onChange={e=>setSubject(e.target.value)} style={styles.input} placeholder="مثال: مشكلة في الدخول إلى الامتحان"/></label><label>تفاصيل المشكلة<textarea value={body} onChange={e=>setBody(e.target.value)} style={{...styles.input,minHeight:130,resize:'vertical'}} placeholder="اشرح المشكلة والخطوات التي ظهرت لك…"/></label><label style={{display:'flex',alignItems:'center',gap:8,cursor:'pointer'}}><FaPaperclip/> إرفاق ملف (حتى 25MB)<input type="file" onChange={e=>setAttachment(e.target.files?.[0]||null)} style={{maxWidth:'100%'}}/></label>{attachment&&<small style={{color:'#a5f3fc'}}>{attachment.name} — {(attachment.size/1024/1024).toFixed(2)} MB</small>}<button disabled={sending||!studentId} onClick={send} style={{...styles.button,opacity:(sending||!studentId)?0.65:1}}>{sending?'جارٍ الإرسال…':'إرسال الرسالة'}</button></div>}
+ {view!=='compose'&&<>{loading&&<p>جارٍ تحميل الرسائل…</p>}{!loading&&visible.length===0&&<div style={{textAlign:'center',padding:30,color:'#cbd5e1'}}>لا توجد رسائل في هذا القسم حالياً.</div>}<div style={{display:'grid',gridTemplateColumns:'repeat(auto-fit,minmax(min(100%,280px),1fr))',gap:10}}>{visible.map(m=><button key={m.id} onClick={()=>markRead(m)} style={{...styles.card,borderColor:m.sender_type==='support'&&!m.is_read?'#22d3ee':'#29496b'}}><div style={{display:'flex',justifyContent:'space-between',gap:8}}><b>{m.subject||'رسالة دعم فني'}</b>{m.sender_type==='support'&&!m.is_read&&<span style={{color:'#67e8f9'}}>جديد</span>}</div><p style={{color:'#cbd5e1',fontSize:13,overflow:'hidden',display:'-webkit-box',WebkitLineClamp:2,WebkitBoxOrient:'vertical'}}>{m.message||'مرفق'}</p><small style={{color:'#94a3b8'}}>{m.created_at?new Date(m.created_at).toLocaleString('ar'):''}</small></button>)}</div>{selected&&<div style={{marginTop:18,padding:18,border:'1px solid #365779',borderRadius:14,background:'#07162b'}}><div style={{display:'flex',justifyContent:'space-between',gap:10,alignItems:'start'}}><h3 style={{marginTop:0,color:'#67e8f9'}}>{selected.subject||'رسالة دعم فني'}</h3><button onClick={()=>setSelected(null)} style={styles.tab}>إغلاق</button></div><p style={{whiteSpace:'pre-wrap',lineHeight:1.9}}>{selected.message}</p><small style={{color:'#94a3b8'}}>{selected.created_at?new Date(selected.created_at).toLocaleString('ar'):''}</small><div style={{display:'flex',gap:8,flexWrap:'wrap',marginTop:14}}>{selected.attachment_path&&<button onClick={()=>openAttachment(selected)} style={styles.tab}><FaPaperclip/> فتح المرفق</button>}<button onClick={()=>removeMessage(selected)} style={styles.tab}><FaTrash/> نقل إلى سلة المحذوفات</button></div></div>}</>}
+ </> }</section></div></main>;
 }

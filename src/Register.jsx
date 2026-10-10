@@ -1308,56 +1308,61 @@ export default function Register({ supabase, onRegisterSuccess, onBack }) {
   return (
     <div style={{ color: '#fff', fontFamily: 'Noto Kufi Arabic, sans-serif', backgroundColor: '#0f172a', minHeight: '100vh', display: 'flex', flexDirection: 'column' }} dir="rtl">
       
-      {/* سطر البسملة في أعلى منتصف الشاشة */}
-      <div style={{ width: '100%', textAlign: 'center', padding: '12px 0 5px 0', backgroundColor: '#090d16', borderBottom: '1px solid #1e293b', fontSize: '18px', fontWeight: 'bold', color: '#fbbf24', letterSpacing: '1px' }}>
-        بسم الله الرحمن الرحيم
-      </div>
+      <style>{`
+        .registration-page-head {
+          display:flex; flex-direction:column; align-items:center; text-align:center;
+          width:100%; padding:12px 14px 22px; gap:0;
+          background:radial-gradient(ellipse at top,rgba(37,99,235,.20),transparent 68%),#090d16;
+          border-bottom:1px solid rgba(56,189,248,.24);
+        }
+        .registration-basmala { width:100%; padding:2px 0 9px; color:#fbbf24; font-size:16px; font-weight:800; letter-spacing:.2px; }
+        .registration-logo { width:clamp(54px,14vw,76px); height:clamp(54px,14vw,76px); object-fit:contain; margin:7px auto 8px; border-radius:50%; background:rgba(255,255,255,.04); padding:3px; filter:drop-shadow(0 0 13px rgba(56,189,248,.25)); }
+        .registration-institution { color:#f8fafc; font-size:clamp(13px,3.2vw,19px); font-weight:900; line-height:1.8; }
+        .registration-unit { max-width:850px; color:#94a3b8; font-size:clamp(10px,2.5vw,13px); font-weight:700; line-height:1.8; }
+        .registration-title { margin:11px 0 0; color:#eaf4ff; font-size:clamp(20px,5vw,29px); line-height:1.5; font-weight:950; text-shadow:0 0 22px rgba(59,130,246,.25); }
+        .registration-head-actions { display:flex; align-items:center; justify-content:center; flex-wrap:wrap; gap:10px; margin-top:14px; width:min(440px,100%); }
+        .registration-head-actions button { min-height:43px; padding:10px 18px; border-radius:12px; font-family:inherit; font-size:13px; font-weight:900; cursor:pointer; transition:transform .2s ease,box-shadow .2s ease; }
+        .registration-head-actions button:hover { transform:translateY(-2px); box-shadow:0 0 20px rgba(59,130,246,.28); }
+        .registration-home-button { color:#fff; border:1px solid #38bdf8; background:linear-gradient(135deg,#2563eb,#1d4ed8); }
+        .registration-logout-button { color:#fff; border:1px solid #f87171; background:linear-gradient(135deg,#dc2626,#991b1b); }
+        .registration-lookup-card { background:linear-gradient(145deg,rgba(30,41,59,.96),rgba(15,23,42,.98)) !important; border:1px solid rgba(96,165,250,.28) !important; border-radius:20px !important; box-shadow:0 18px 45px rgba(0,0,0,.22) !important; }
+        .registration-section-title { color:#60a5fa; font-size:clamp(17px,4.3vw,23px); font-weight:900; margin:0 0 16px; padding-bottom:12px; border-bottom:1px solid rgba(148,163,184,.22); text-align:right; }
+        .registration-cycle-panel { background:rgba(8,18,38,.78) !important; border-color:rgba(96,165,250,.25) !important; border-radius:16px !important; }
+        .registration-cycle-label { color:#e2e8f0; font-size:clamp(14px,3.5vw,17px) !important; }
+        .registration-id-row { display:flex; flex-direction:column; gap:12px; margin-top:15px; }
+        .registration-id-label { display:block; color:#e2e8f0; font-weight:900; font-size:15px; margin-bottom:8px; text-align:right; }
+        .registration-id-input { width:100%; min-height:54px; padding:13px 16px; border-radius:13px; border:1px solid #475569; background:#0f172a; color:#fff; font-family:inherit; font-size:16px; font-weight:700; outline:none; }
+        .registration-id-input:focus { border-color:#38bdf8; box-shadow:0 0 0 3px rgba(56,189,248,.13); }
+        .registration-search-button { min-height:52px; width:100%; padding:12px 20px; border-radius:13px; border:1px solid #38bdf8; color:#fff; font-family:inherit; font-size:16px; font-weight:900; background:linear-gradient(100deg,#0284c7,#2563eb,#7c3aed); cursor:pointer; box-shadow:0 8px 22px rgba(37,99,235,.22); transition:transform .2s ease,box-shadow .2s ease; }
+        .registration-search-button:hover { transform:translateY(-2px); box-shadow:0 12px 27px rgba(37,99,235,.32); }
+        @media(max-width:600px) {
+          .registration-page-head { padding:8px 12px 18px; }
+          .registration-unit { max-width:350px; }
+          .registration-head-actions { display:grid; grid-template-columns:1fr 1fr; }
+          .registration-head-actions button { width:100%; padding:10px 7px; font-size:12px; }
+        }
+      `}</style>
 
-      {/* رأس الصفحة والترويسة */}
-      <header style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', width: '100%', borderBottom: '1px solid #334155', padding: '15px 25px', backgroundColor: '#1e293b', boxSizing: 'border-box' }}>
-        <div style={{ display: 'flex', alignItems: 'center', gap: '15px' }}>
-          <img
-            src={institution?.logo_url || ministryLogo}
-            alt="شعار المؤسسة"
-            style={{
-              width: '45px',
-              height: '45px',
-              objectFit: 'contain',
-              borderRadius: '50%',
-              overflow: 'hidden'
-            }}
-          />
-          <div>
-            <h4 style={{ margin: '0', color: '#f8fafc', fontSize: '13px', fontWeight: 'bold' }}>{institution?.name || institution?.name_line_1 || institution?.official_name || 'اسم المؤسسة'}</h4>
-            <p style={{ margin: '2px 0 0 0', color: '#94a3b8', fontSize: '11px', fontWeight: 'bold' }}>
-              قسم القياس والتقويم والامتحانات - امتحان إتمام شهادة الدراسة الثانوية العامة - {currentServerYear}
-            </p>
-          </div>
+      {/* الترويسة: البسملة ثم الشعار واسم المؤسسة ثم طلب التسجيل والأزرار */}
+      <header className="registration-page-head">
+        <div className="registration-basmala">بسم الله الرحمن الرحيم</div>
+        <img
+          className="registration-logo"
+          src={institution?.logo_url || ministryLogo}
+          alt="شعار المؤسسة"
+        />
+        <div className="registration-institution">
+          {institution?.name || institution?.name_line_1 || institution?.official_name || 'اسم المؤسسة'}
         </div>
-
-        <div style={{ textAlign: 'center' }}>
-          <div style={{ fontSize: '16px', fontWeight: 'bold', color: '#f8fafc' }}>طلب تسجيل اشتراك بامتحانات الثانوية العامة</div>
-          <div style={{ fontSize: '12px', color: '#cbd5e1', marginTop: '3px' }}>الدورة: {registrationCycle ? getCycleLabel(registrationCycle) : 'اختر الدورة'} | لسنة: {currentServerYear}</div>
+        <div className="registration-unit">
+          قسم القياس والتقويم والامتحانات · امتحان إتمام شهادة الدراسة الثانوية العامة · {currentServerYear}
         </div>
-
-        <div style={{ display: 'flex', gap: '12px', alignItems: 'center' }}>
-          {onBack && (
-            <>
-              <button 
-                onClick={onBack} 
-                style={{ padding: '8px 16px', backgroundColor: '#2563eb', color: '#fff', border: 'none', borderRadius: '6px', cursor: 'pointer', fontSize: '14px', fontWeight: 'bold', boxShadow: '0 2px 8px rgba(37, 99, 235, 0.4)' }}
-              >
-                🏠 الرئيسية
-              </button>
-              
-              <button 
-                onClick={onBack} 
-                style={{ padding: '8px 14px', backgroundColor: '#dc2626', color: '#fff', border: 'none', borderRadius: '6px', cursor: 'pointer', fontSize: '13px', fontWeight: 'bold' }}
-              >
-                تسجيل الخروج
-              </button>
-            </>
-          )}
+        <h1 className="registration-title">طلب تسجيل</h1>
+        <div className="registration-head-actions">
+          {onBack && <>
+            <button type="button" className="registration-home-button" onClick={onBack}>🏠 الرئيسية</button>
+            <button type="button" className="registration-logout-button" onClick={onBack}>تسجيل الخروج</button>
+          </>}
         </div>
       </header>
 
@@ -1410,13 +1415,11 @@ export default function Register({ supabase, onRegisterSuccess, onBack }) {
         )}
 
         {!student && (
-          <div style={{ backgroundColor: '#1e293b', padding: '25px', borderRadius: '12px', boxShadow: '0 4px 6px -1px rgba(0,0,0,0.2)', border: '1px solid #334155' }}>
-            <h3 style={{ fontSize: '16px', fontWeight: 'bold', color: '#60a5fa', marginBottom: '15px', borderBottom: '2px solid #334155', paddingBottom: '10px', textAlign: 'right' }}>
-              استعلام عن بيانات الطالب برقم الهوية
-            </h3>
+          <div className="registration-lookup-card" style={{ padding: 'clamp(16px, 4vw, 28px)' }}>
+            <h3 className="registration-section-title">اختيار الدورات</h3>
             <form onSubmit={handleCheck} style={{ display: 'flex', flexDirection: 'column' }}>
-              <div style={{ marginBottom: '18px', backgroundColor: '#0f172a', border: '1px solid #334155', borderRadius: '10px', padding: '14px' }}>
-                <div style={{ color: '#f8fafc', fontWeight: 'bold', fontSize: '14px', marginBottom: '10px', textAlign: 'right' }}>اختر دورة التسجيل:</div>
+              <div className="registration-cycle-panel" style={{ marginBottom: '18px', border: '1px solid #334155', padding: '14px' }}>
+                <div className="registration-cycle-label" style={{ fontWeight: 'bold', marginBottom: '10px', textAlign: 'right' }}>اختر دورة التسجيل:</div>
                 <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: '8px', direction: 'rtl' }}>
                   {[1, 2, 3].map((cycle) => {
                     const open = isCycleOpen(cycle);
@@ -1452,8 +1455,11 @@ export default function Register({ supabase, onRegisterSuccess, onBack }) {
                     : [1, 2, 3].map((cycle) => `${getCycleLabel(cycle)}: ${getCycleDateText(cycle)}`).join(' | ')}
                 </div>
               </div>
-              <div style={{ display: 'flex', gap: '10px' }}>
+              <div className="registration-id-row">
+                <label className="registration-id-label" htmlFor="registration-national-id">رقم الهوية</label>
                 <input
+                  id="registration-national-id"
+                  className="registration-id-input"
                   type="text"
                   placeholder="أدخل رقم الهوية"
                   value={nationalId}
@@ -1461,10 +1467,10 @@ export default function Register({ supabase, onRegisterSuccess, onBack }) {
                   inputMode="numeric"
                   pattern="[0-9]{9}"
                   onChange={(e) => setNationalId(e.target.value.replace(/\D/g, '').slice(0, 9))}
-                  style={{ flex: 1, padding: '12px 15px', borderRadius: '8px', border: '1.5px solid #475569', backgroundColor: '#0f172a', fontSize: '15px', outline: 'none', fontWeight: '600', color: '#fff' }}
+                  
                   required
                 />
-                <button type="submit" style={{ backgroundColor: '#2563eb', color: '#fff', border: 'none', padding: '0 28px', borderRadius: '8px', fontWeight: 'bold', cursor: 'pointer', fontSize: '15px', whiteSpace: 'nowrap' }}>بحث</button>
+                <button type="submit" className="registration-search-button">⌕ &nbsp; بحث</button>
               </div>
             </form>
           </div>
