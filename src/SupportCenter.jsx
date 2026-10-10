@@ -56,7 +56,7 @@ export default function SupportCenter({ onBack, supabase, student }) {
    const {data:valid,error:verifyError}=await supabase.rpc('verify_student_password',{p_seating_number:cleanSeat,p_password:cleanPassword});
    if(verifyError){setNotice('تعذر التحقق من كلمة المرور. تأكد من تفعيل دالة verify_student_password في Supabase.');return;}
    if(valid!==true){setNotice('رقم الجلوس أو كلمة المرور غير صحيحة.');return;}
-   setVerifiedStudent({...record,seating_number:record.seating_number||cleanSeat});
+   setVerifiedStudent({...record,seating_number:record.seating_number||cleanSeat,__supportPassword:cleanPassword});
    setPassword('');setView('inbox');setSelected(null);setNotice('تم التحقق من بياناتك. يمكنك الآن فتح نموذج المراسلات.');
   } catch(error){setNotice(`تعذر التحقق من البيانات: ${error?.message||'تحقق من اتصال قاعدة البيانات.'}`);}
   finally{setChecking(false);}
@@ -98,26 +98,40 @@ export default function SupportCenter({ onBack, supabase, student }) {
  const markRead=async m=>{setSelected(m);if(m.sender_type==='support'&&!m.is_read){const {error}=await supabase.from('student_support_messages').update({is_read:true,read_at:new Date().toISOString()}).eq('id',m.id);if(!error){setMessages(prev=>prev.map(x=>x.id===m.id?{...x,is_read:true}:x));setUnread(n=>Math.max(0,n-1));}}};
 
  const sendRegisteredMessage=async()=>{
-  if(!studentId){setNotice('تحقق من بيانات الطالب أولاً.');return;}
+  if(!verifiedStudent){setNotice('تحقق من بيانات الطالب أولاً.');return;}
   if(!subject.trim()||(!body.trim()&&!attachment)){setNotice('أدخل عنوان الرسالة والتفاصيل أو أرفق ملفاً.');return;}
-  if(attachment&&attachment.size>MAX_FILE_SIZE){setNotice('حجم المرفق الأقصى 25 ميجابايت.');return;}
+  if(attachment&&attachment.size>5*1024*1024){setNotice('حجم المرفق الأقصى 5 ميجابايت.');return;}
+  if(!supabase){setNotice('تعذر الاتصال بقاعدة البيانات.');return;}
   setSending(true);setNotice('');
   try{
-   let path=null,name=null,mime=null,size=null;
-   if(attachment){const safe=attachment.name.replace(/[^a-zA-Z0-9._\-\u0600-\u06FF]/g,'_');path=`student/${studentId}/${Date.now()}_${safe}`;const up=await supabase.storage.from(BUCKET).upload(path,attachment,{upsert:false,contentType:attachment.type||undefined});if(up.error)throw up.error;name=attachment.name;mime=attachment.type||'application/octet-stream';size=attachment.size;}
-   const {error}=await supabase.from('student_support_messages').insert({student_id:studentId,sender_type:'student',sender_employee_id:null,subject:subject.trim(),message:body.trim(),attachment_path:path,attachment_name:name,attachment_mime:mime,attachment_size:size,delivered_at:new Date().toISOString(),is_read:false,read_at:null,sender_deleted_at:null,recipient_deleted_at:null});
+   let attachmentPayload=null;
+   if(attachment){const bytes=new Uint8Array(await attachment.arrayBuffer());let binary='';for(let i=0;i<bytes.length;i+=0x8000)binary+=String.fromCharCode(...bytes.subarray(i,i+0x8000));attachmentPayload={name:attachment.name,mime:attachment.type||'application/octet-stream',base64:btoa(binary)};}
+   const {data,error}=await supabase.functions.invoke('submit-unregistered-support-request',{body:{audience:'registered',seating_number:verifiedStudent.seating_number,password:verifiedStudent.__supportPassword,subject:subject.trim(),message:body.trim(),attachment:attachmentPayload}});
    if(error)throw error;
-   setSubject('');setBody('');setAttachment(null);setView('sent');setNotice('تم إرسال رسالتك بنجاح. يمكنك متابعة الرد من صندوق الوارد. ✓');await loadMessages();
-  }catch(error){setNotice(`تعذر إرسال الرسالة: ${error?.message||'تحقق من إعدادات Supabase الآمنة للمراسلات.'}`);}
+   if(!data?.ok)throw new Error(data?.error||'لم يؤكد الخادم حفظ الرسالة.');
+   setSubject('');setBody('');setAttachment(null);setView('sent');setNotice(`تم إرسال رسالتك بنجاح. رقم الرسالة: ${data.request_id} ✓`);await loadMessages();
+  }catch(error){setNotice(`تعذر إرسال الرسالة: ${error?.message||'تحقق من نشر دالة الدعم وإعدادات Supabase.'}`);}
   finally{setSending(false);}
  };
  const sendUnregisteredRequest=async()=>{
   if(!verifiedUnregistered){setNotice('تحقق من رقم الهوية أولاً.');return;}
   if(!body.trim()){setNotice('اكتب تفاصيل المشكلة قبل الإرسال.');return;}
-  if(attachment&&attachment.size>MAX_FILE_SIZE){setNotice('حجم المرفق الأقصى 25 ميجابايت.');return;}
-  // The current schema does not provide a secure unauthenticated submission endpoint.
-  // Do not insert private requests directly from the browser using the public key.
-  setNotice('تم التحقق من الهوية وتجهيز الطلب، لكن الإرسال الفعلي يحتاج API آمنة تستقبل الطلب وتتحقق من الهوية على الخادم. لم يتم إرسال الرسالة بعد.');
+  if(attachment&&attachment.size>5*1024*1024){setNotice('حجم المرفق الأقصى لهذا النموذج 5 ميجابايت.');return;}
+  if(!supabase){setNotice('تعذر الاتصال بقاعدة البيانات.');return;}
+  setSending(true);setNotice('');
+  try{
+   let attachmentPayload=null;
+   if(attachment){
+    const bytes=new Uint8Array(await attachment.arrayBuffer());
+    let binary=''; for(let i=0;i<bytes.length;i+=0x8000) binary+=String.fromCharCode(...bytes.subarray(i,i+0x8000));
+    attachmentPayload={name:attachment.name,mime:attachment.type||'application/octet-stream',base64:btoa(binary)};
+   }
+   const {data,error}=await supabase.functions.invoke('submit-unregistered-support-request',{body:{national_id:verifiedUnregistered.national_id,issue_type:issueType,message:body.trim(),attachment:attachmentPayload}});
+   if(error) throw error;
+   if(!data?.ok) throw new Error(data?.error||'لم يؤكد الخادم حفظ الطلب.');
+   setBody('');setAttachment(null);setNotice(`تم إرسال طلب الدعم بنجاح. رقم الطلب: ${data.request_id} ✓`);
+  }catch(error){setNotice(`تعذر إرسال الطلب: ${error?.message||'تحقق من نشر الدالة وإعدادات Supabase.'}`);}
+  finally{setSending(false);}
  };
  const openAttachment=async m=>{if(!m.attachment_path)return;const {data,error}=await supabase.storage.from(BUCKET).createSignedUrl(m.attachment_path,300);if(error){setNotice('تعذر فتح المرفق؛ تحقق من صلاحيات التخزين.');return;}window.open(data.signedUrl,'_blank','noopener,noreferrer');};
  const removeMessage=async m=>{const field=m.sender_type==='student'?'sender_deleted_at':'recipient_deleted_at';const {error}=await supabase.from('student_support_messages').update({[field]:new Date().toISOString()}).eq('id',m.id);if(error){setNotice('تعذر نقل الرسالة إلى سلة المحذوفات. تحقق من صلاحيات Supabase.');return;}setSelected(null);await loadMessages();};
@@ -148,7 +162,6 @@ export default function SupportCenter({ onBack, supabase, student }) {
    </form>}
 
    {audience==='unregistered'&&verifiedUnregistered&&<div style={{display:'grid',gap:14}}>
-    <div style={{padding:14,border:'1px solid #0f766e',borderRadius:12,background:'#103a3b',color:'#ccfbf1'}}>✓ تم العثور على رقم الهوية في جدول allow_student. اكتب طلب الدعم أدناه.</div>
     <label style={styles.label}>نوع المشكلة<select value={issueType} onChange={e=>setIssueType(e.target.value)} style={styles.input}><option>عدم التسجيل</option><option>نسيت رقم الجلوس</option></select></label>
     <label style={styles.label}>تفاصيل المشكلة<textarea value={body} onChange={e=>setBody(e.target.value)} style={{...styles.input,minHeight:130,resize:'vertical'}} placeholder="اكتب تفاصيل المشكلة بوضوح…"/></label>
     <label style={{...styles.label,display:'flex',alignItems:'center',gap:8,flexWrap:'wrap'}}> <FaPaperclip/> إرفاق ملف (اختياري)<input type="file" onChange={e=>setAttachment(e.target.files?.[0]||null)} /></label>

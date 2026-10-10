@@ -28,7 +28,7 @@ export default function App() {
   };
 
   return (
-    <div className="app-main-wrapper" style={{ minHeight: '100vh', backgroundColor: '#f8fafc' }}>
+    <div className="app-main-wrapper" style={{ minHeight: '100vh', backgroundColor: '#020d2b' }}>
       {currentScreen === 'welcome' && (
         <WelcomeScreen
           onNavigateExamPortal={() => setCurrentScreen('examPortal')}
