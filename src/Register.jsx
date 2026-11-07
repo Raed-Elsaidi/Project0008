@@ -56,6 +56,8 @@ export default function Register({ supabase, onRegisterSuccess, onBack }) {
   const [registrationStage, setRegistrationStage] = useState('');
   const [registrationCompleted, setRegistrationCompleted] = useState(false);
   const [editingStudent, setEditingStudent] = useState(false);
+  // إخفاء زر تعديل البيانات بعد تقديم أول طلب، مع استعادة الحالة من قاعدة البيانات عند إعادة البحث.
+  const [personalChangeRequestSent, setPersonalChangeRequestSent] = useState(false);
   const [dataConfirmed, setDataConfirmed] = useState(false);
   const [faceModelsReady, setFaceModelsReady] = useState(false);
   const [faceModelsLoading, setFaceModelsLoading] = useState(true);
@@ -306,64 +308,49 @@ export default function Register({ supabase, onRegisterSuccess, onBack }) {
     }
 
     try {
-      // 1) أولاً: البحث في جدول students.
-      // نتحقق من الدورة المختارة حتى يستطيع الطالب التسجيل في دورة جديدة
-      // إذا كان قد سجل في دورة سابقة.
+      setPersonalChangeRequestSent(false);
+      setEditingStudent(false);
+
+      // 1) مصدر بيانات الطالب قبل التسجيل وإصدار رقم الجلوس هو allow_student فقط.
       if (!registrationCycle || !isCycleOpen(registrationCycle)) {
         showAlert('يرجى اختيار دورة تسجيل متاحة حاليًا قبل البحث عن الطالب.', 'error');
         return;
       }
 
-// فحص حالة طلب التسجيل اليدوي أولاً
-const { data: reviewStatus, error: reviewError } = await supabase.rpc(
-  'get_student_registration_status',
-  {
-    p_national_id: enteredNationalId,
-    p_academic_year: currentServerYear,
-    p_registration_cycle: registrationCycle
-  }
-);
+      const { data: studentData, error: studentError } = await supabase
+        .from('allow_student')
+        .select('*')
+        .eq('national_id', enteredNationalId)
+        .maybeSingle();
 
-if (reviewError) throw reviewError;
+      if (studentError) throw studentError;
 
-if (reviewStatus?.status === 'pending') {
-  setLookupResultModal({
-    type: 'pending',
-    title: 'طلب التسجيل قيد المراجعة',
-    text: 'تم استلام طلبك، يرجى الانتظار حتى تتم مراجعته.'
-  });
-  return;
-}
+      if (!studentData) {
+        setLookupResultModal({
+          type: 'not-found',
+          title: 'لا يوجد لك بيانات بالنظام',
+          text: 'يرجى مراجعة أقرب مديرية تربية وتعليم.'
+        });
+        return;
+      }
 
-if (reviewStatus?.status === 'rejected') {
-  setLookupResultModal({
-    type: 'rejected',
-    title: 'تم رفض طلب التسجيل',
-    text: reviewStatus.reviewer_note || 'يرجى مراجعة المسجل.'
-  });
-  return;
-}
+      // إذا سبق للطالب تقديم أي طلب تعديل، لا نعرض زر التعديل مرة أخرى.
+      const { data: previousPersonalRequest, error: previousPersonalRequestError } = await supabase
+        .from('student_personal_data_change_requests')
+        .select('id')
+        .eq('national_id', String(studentData.national_id || enteredNationalId).trim())
+        .limit(1)
+        .maybeSingle();
 
-if (reviewStatus?.status === 'approved') {
-  const { data: credentials, error: credentialsError } = await supabase.rpc(
-    'get_student_registration_credentials',
-    { p_national_id: enteredNationalId }
-  );
+      if (previousPersonalRequestError) {
+        console.warn('Could not check previous personal-data requests:', previousPersonalRequestError);
+        setPersonalChangeRequestSent(false);
+      } else {
+        setPersonalChangeRequestSent(Boolean(previousPersonalRequest));
+      }
 
-  if (credentialsError) throw credentialsError;
-
-  const issued = Array.isArray(credentials) ? credentials[0] : credentials;
-
-  setLookupResultModal({
-    type: 'approved',
-    title: 'تمت الموافقة على تسجيلك',
-    text: 'يمكنك الآن الدخول إلى النظام باستخدام بياناتك التالية.',
-    seatNumber: issued?.seating_number || reviewStatus.seating_number || '',
-    password: issued?.temporary_password || ''
-  });
-  return;
-}
-
+      // بعد وجود سجل allow_student فقط، نتحقق هل سبق إصدار رقم جلوس
+      // لهذا الطالب في الدورة الحالية؛ سجل students يمثل التسجيل المكتمل.
       const { data: existingCycle, error: existingCycleError } = await supabase
         .from('students')
         .select('id, national_id, seating_number, full_name_ar, academic_year, registration_cycle')
@@ -375,37 +362,17 @@ if (reviewStatus?.status === 'approved') {
       if (existingCycleError) throw existingCycleError;
 
       if (existingCycle) {
-        // مسجل مسبقاً في الدورة الحالية: لا نبحث في allow_student ولا نطلب صوراً.
         setLookupResultModal({
           type: 'registered',
           title: 'تم تسجيلك مسبقًا في النظام',
-          text: `عزيزي الطالب: ${existingCycle.full_name_ar || ''}`,
+          text: `عزيزي الطالب: ${existingCycle.full_name_ar || studentData.full_name_ar || ''}`,
           seatNumber: existingCycle.seating_number,
           password: ''
         });
         return;
       }
 
-      // 2) إذا لم يوجد في students: البحث في allow_student.
-      const { data: studentData, error: studentError } = await supabase
-        .from('allow_student')
-        .select('*')
-        .eq('national_id', enteredNationalId)
-        .maybeSingle();
-
-      if (studentError) throw studentError;
-
-      // 3) إذا لم يوجد في allow_student: رسالة واضحة وإغلاق النموذج عند الضغط على إغلاق.
-      if (!studentData) {
-        setLookupResultModal({
-          type: 'not-found',
-          title: 'لا يوجد لك بيانات بالنظام',
-          text: 'يرجى مراجعة أقرب مديرية تربية وتعليم.'
-        });
-        return;
-      }
-
-      // الطالب موجود في allow_student وغير مسجل في الدورة الحالية: نكمل معه التسجيل.
+      // الطالب موجود في allow_student ولم يصدر له رقم جلوس في هذه الدورة: نكمل التسجيل.
       setStudent(studentData);
       originalStudentRef.current = { ...studentData };
       setDataConfirmed(false);
@@ -469,6 +436,17 @@ if (reviewStatus?.status === 'approved') {
       } else {
         await loadSchools();
       }
+
+      // اعتماد نسخة أصلية موحّدة بعد حلّ المعرّفات والأسماء المرجعية.
+      // هذا يمنع ظهور اختلافات وهمية أو فقدان تغييرات المديرية/الفرع عند الإرسال.
+      const canonicalStudent = {
+        ...studentData,
+        branch_id: resolvedBranchId,
+        branch: resolvedBranchName,
+        directorate_id: resolvedDirectorateId,
+      };
+      setStudent(canonicalStudent);
+      originalStudentRef.current = { ...canonicalStudent };
 
       if (resolvedBranchId) {
         const { data: subsData, error: subjectsError } = await supabase
@@ -670,39 +648,113 @@ if (reviewStatus?.status === 'approved') {
     if (!student) return;
 
     const original = originalStudentRef.current || {};
+    const normalize = (value) => String(value ?? '').trim().replace(/\s+/g, '');
+    // طلبات التعديل تُعرّف الطالب برقم الهوية من allow_student فقط.
     const requestableFields = [
-      'gender', 'birth_date', 'birth_place', 'nationality', 'address',
-      'phone_number', 'whatsapp_number', 'directorate_name', 'school_name', 'branch'
+      ['full_name_en', 'الاسم بالإنجليزية'],
+      ['gender', 'الجنس'],
+      ['birth_date', 'تاريخ الميلاد'],
+      ['birth_place', 'مكان الميلاد'],
+      ['nationality', 'الجنسية'],
+      ['address', 'العنوان'],
+      ['phone_number', 'رقم الهاتف'],
+      ['whatsapp_number', 'رقم الواتساب'],
+      ['branch', 'الفرع']
     ];
 
-    const changed = requestableFields
-      .filter((field) => String(student[field] ?? '') !== String(original[field] ?? ''))
-      .map((field) => ({
-        field_name: field,
-        current_value: String(original[field] ?? ''),
-        requested_value: String(student[field] ?? '')
-      }));
+    const requestNationalId = toEnglishDigits(
+      String(original.national_id || student.national_id || nationalId || '')
+    ).trim();
 
-    if (!/^\d{9}$/.test(String(student.national_id || nationalId).trim())) {
-      showAlert('تعذر التحقق من رقم الهوية. أعد البحث برقم الهوية.', 'error');
+    if (!/^\d{9}$/.test(requestNationalId)) {
+      showAlert('تعذر تحديد رقم هوية الطالب. أعد البحث برقم الهوية.', 'error');
       return;
     }
+
+    // التحقق من وجود رقم الهوية في allow_student دون استخدام أي معرّف رقمي داخلي.
+    const { data: allowStudentRecord, error: allowStudentLookupError } = await supabase
+      .from('allow_student')
+      .select('national_id')
+      .eq('national_id', requestNationalId)
+      .maybeSingle();
+
+    if (allowStudentLookupError) {
+      showAlert(`تعذر التحقق من سجل الطالب: ${allowStudentLookupError.message}`, 'error');
+      return;
+    }
+    if (!allowStudentRecord?.national_id) {
+      showAlert('لم يتم العثور على رقم الهوية في allow_student. أعد البحث برقم الهوية.', 'error');
+      return;
+    }
+
+    // استخدم القيمة المرجعية التي أعادتها قاعدة البيانات نفسها، لا القيمة القادمة من حالة النموذج.
+    const verifiedNationalId = String(allowStudentRecord.national_id).trim();
+
+    const changed = requestableFields
+      .filter(([field]) => normalize(student[field]) !== normalize(original[field]))
+      .map(([field, label]) => ({
+        national_id: verifiedNationalId,
+        field_name: field,
+        current_value: String(original[field] ?? ''),
+        requested_value: String(student[field] ?? ''),
+        reason: `طلب تعديل ${label} مقدم من الطالب`,
+        status: 'pending'
+      }));
+
     if (!changed.length) {
-      showAlert('لم يتم تغيير أي بيانات لإرسالها للمراجعة.', 'error');
+      showAlert('لم يتم تغيير أي بيانات قابلة للتعديل لإرسالها للمراجعة.', 'error');
       return;
     }
 
     setRegistering(true);
     try {
-      const { error } = await supabase.rpc('submit_student_personal_data_change_request', {
-        p_national_id: String(student.national_id || nationalId).trim(),
-        p_changes: changed
+      // منع تكرار طلب الحقل نفسه بالاعتماد على رقم الهوية فقط.
+      const { data: openRequests, error: checkError } = await supabase
+        .from('student_personal_data_change_requests')
+        .select('field_name,status')
+        .eq('national_id', requestNationalId)
+        .in('status', ['pending', 'needs_more_info']);
+      if (checkError) throw checkError;
+
+      const openFields = new Set((openRequests || []).map((r) => r.field_name));
+      const duplicateFields = changed.filter((r) => openFields.has(r.field_name));
+      if (duplicateFields.length) {
+        throw new Error(`يوجد طلب قيد المراجعة مسبقًا للحقل: ${duplicateFields.map((r) => r.reason.replace('طلب تعديل ', '').replace(' مقدم من الطالب', '')).join('، ')}`);
+      }
+
+      // تشخيص آمن: لا نطبع رقم الهوية أو القيم الشخصية في Console.
+      console.info('PERSONAL_DATA_REQUEST_DEBUG', {
+        national_id_present: Boolean(verifiedNationalId),
+        national_id_length: verifiedNationalId.length,
+        request_count: changed.length,
+        requests: changed.map(({ field_name, status }) => ({ field_name, status })),
+        all_statuses_pending: changed.every((request) => request.status === 'pending'),
+        all_fields_allowed: changed.every((request) => requestableFields.some(([field]) => field === request.field_name))
       });
-      if (error) throw error;
+
+      const { error } = await supabase
+        .from('student_personal_data_change_requests')
+        .insert(changed);
+      if (error) {
+        console.error('PERSONAL_DATA_REQUEST_INSERT_ERROR', {
+          code: error.code,
+          message: error.message,
+          details: error.details,
+          hint: error.hint,
+          request_count: changed.length,
+          field_names: changed.map((request) => request.field_name),
+          national_id_matches_verified_record: changed.every((request) => request.national_id === verifiedNationalId),
+          statuses: changed.map((request) => request.status)
+        });
+        showAlert(`فشل حفظ طلب التعديل (${error.code || 'بدون رمز'}): ${error.message || 'خطأ غير معروف'}`, 'error');
+        throw error;
+      }
 
       setEditingStudent(false);
+      setPersonalChangeRequestSent(true);
       setStudent({ ...original });
-      showAlert('تم إرسال طلب التعديل إلى المسجل بنجاح، وستبقى بياناتك الأصلية حتى صدور القرار.', 'success');
+      setBranchIdNum(original.branch_id ? Number(original.branch_id) : null);
+      showAlert(`تم إرسال ${changed.length} طلب تعديل مستقل إلى المسجّل بنجاح. ستبقى بياناتك الأصلية حتى صدور القرار لكل حقل.`, 'success');
     } catch (error) {
       console.error('Submit personal data change request failed:', error);
       showAlert(error?.message || 'تعذر إرسال طلب التعديل. تحقق من اتصال قاعدة البيانات وصلاحيات الجدول.', 'error');
@@ -1039,63 +1091,43 @@ if (reviewStatus?.status === 'approved') {
 
   // فحص وجود وجه واضح في صورة الهوية أو صفحة بيانات الجواز.
   const validateIdentityDocumentFace = async (file) => {
-  if (!faceModelsReady) {
-    throw new Error(
-      faceModelsError ||
-      'لم يجهز نظام فحص الوجه بعد. انتظر لحظات ثم حاول مرة أخرى.'
-    );
-  }
-
-  let image;
-  try {
-    image = await decodeUploadedImage(file);
-
-    const width = image.width || image.naturalWidth;
-    const height = image.height || image.naturalHeight;
-
-    if (!width || !height) {
-      throw new Error('تعذر قراءة أبعاد صورة الوثيقة.');
-    }
-
-    const canvas = document.createElement('canvas');
-    canvas.width = width;
-    canvas.height = height;
-
-    const context = canvas.getContext('2d');
-    if (!context) {
-      throw new Error('تعذر تجهيز الصورة للفحص.');
-    }
-
-    context.drawImage(image, 0, 0, width, height);
-
-    const detections = await faceapi.detectAllFaces(
-      canvas,
-      new faceapi.TinyFaceDetectorOptions({
-        inputSize: 416,
-        scoreThreshold: 0.25
-      })
-    );
-
-    if (!detections || detections.length === 0) {
+    if (!faceModelsReady) {
       throw new Error(
-        identityDocumentType === 'id'
-          ? 'لم يتم العثور على صورة وجه واضحة داخل الهوية. يرجى رفع صورة الهوية كاملة وواضحة.'
-          : 'لم يتم العثور على صورة وجه واضحة داخل صفحة بيانات الجواز. يرجى رفع صورة واضحة.'
+        faceModelsError ||
+        'لم يجهز نظام فحص الوجه بعد. انتظر لحظات ثم حاول مرة أخرى.'
       );
     }
 
-    return {
-      detected: true,
-      count: detections.length,
-      score: Number(detections[0]?.score || 0)
-    };
-  } finally {
-    if (image && typeof image.close === 'function') {
-      image.close();
-    }
-  }
-};
+    let image;
+    try {
+      image = await decodeUploadedImage(file);
+      const detections = await faceapi.detectAllFaces(
+        image,
+        new faceapi.TinyFaceDetectorOptions({
+          inputSize: 416,
+          scoreThreshold: 0.25
+        })
+      );
 
+      if (!detections || detections.length === 0) {
+        throw new Error(
+          identityDocumentType === 'id'
+            ? 'لم يتم العثور على صورة وجه واضحة داخل الهوية. يرجى رفع صورة الهوية كاملة وواضحة.'
+            : 'لم يتم العثور على صورة وجه واضحة داخل صفحة بيانات الجواز. يرجى رفع صورة واضحة.'
+        );
+      }
+
+      // نسمح بأكثر من عنصر/وجه في الوثيقة لأن بعض الوثائق قد تحتوي صورًا صغيرة،
+      // لكن يجب وجود وجه قابل للكشف على الأقل.
+      return {
+        detected: true,
+        count: detections.length,
+        score: Number(detections[0]?.score || 0)
+      };
+    } finally {
+      if (image && typeof image.close === 'function') image.close();
+    }
+  };
 
   const confirmRegistration = async (e) => {
     e.preventDefault();
@@ -1414,7 +1446,7 @@ if (reviewStatus?.status === 'approved') {
 
   return (
     <div style={{ color: '#fff', fontFamily: 'Noto Kufi Arabic, sans-serif', backgroundColor: '#0f172a', minHeight: '100vh', display: 'flex', flexDirection: 'column' }} dir="rtl">
-
+      
       <style>{`
         .registration-page-head {
           display:flex; flex-direction:column; align-items:center; text-align:center;
@@ -1475,7 +1507,7 @@ if (reviewStatus?.status === 'approved') {
 
       {/* المحتوى الرئيسي */}
       <div style={{ maxWidth: '1000px', width: '100%', margin: '30px auto', padding: '0 20px', display: 'flex', flexDirection: 'column', gap: '20px', boxSizing: 'border-box' }}>
-
+        
         {/* رسالة وسط الشاشة، تختفي تلقائياً بعد ثانيتين */}
         {message.text && (
           <div
@@ -1574,7 +1606,7 @@ if (reviewStatus?.status === 'approved') {
                   inputMode="numeric"
                   pattern="[0-9]{9}"
                   onChange={(e) => setNationalId(e.target.value.replace(/\D/g, '').slice(0, 9))}
-
+                  
                   required
                 />
                 <button type="submit" className="registration-search-button">⌕ &nbsp; بحث</button>
@@ -1587,9 +1619,9 @@ if (reviewStatus?.status === 'approved') {
           <div style={{ backgroundColor: '#1e293b', borderRadius: '12px', boxShadow: '0 10px 15px -3px rgba(0,0,0,0.3)', border: '1px solid #334155', overflow: 'hidden' }}>
             <div style={{ backgroundColor: '#0f172a', color: '#fff', padding: '15px 20px', display: 'flex', justifyContent: 'space-between', alignItems: 'center', fontSize: '16px', fontWeight: 'bold', borderBottom: '1px solid #334155' }}>
               <h2>بيانات الطالب المرشح للاشتراك</h2>
-              <button onClick={() => { setStudent(null); setDataConfirmed(false); setEditingStudent(false); setRegistrationCompleted(false); }} style={{ backgroundColor: '#334155', color: '#fff', border: 'none', padding: '6px 12px', borderRadius: '6px', cursor: 'pointer', fontSize: '12px', fontWeight: 'bold' }}>بحث عن طالب آخر ↺</button>
+              <button onClick={() => { setStudent(null); setDataConfirmed(false); setEditingStudent(false); setPersonalChangeRequestSent(false); setRegistrationCompleted(false); }} style={{ backgroundColor: '#334155', color: '#fff', border: 'none', padding: '6px 12px', borderRadius: '6px', cursor: 'pointer', fontSize: '12px', fontWeight: 'bold' }}>بحث عن طالب آخر ↺</button>
             </div>
-
+            
             <div style={{ padding: '25px' }}>
               {!registrationCompleted && !editingStudent ? (
                 <>
@@ -1648,27 +1680,29 @@ if (reviewStatus?.status === 'approved') {
                     </div>
                   </div>
 
-                  <div style={{ textAlign: 'center', marginBottom: '15px' }}>
-                    <button
-                      type="button"
-                      onClick={() => {
-                        if (!registrationCompleted) setEditingStudent(true);
-                      }}
-                      disabled={registrationCompleted}
-                      style={{
-                        backgroundColor: '#f59e0b',
-                        color: '#fff',
-                        border: 'none',
-                        padding: '10px 24px',
-                        borderRadius: '8px',
-                        fontSize: '14px',
-                        fontWeight: 'bold',
-                        cursor: 'pointer'
-                      }}
-                    >
-                      ✏️ تعديل بيانات الطالب
-                    </button>
-                  </div>
+                  {!personalChangeRequestSent && (
+                    <div style={{ textAlign: 'center', marginBottom: '15px' }}>
+                      <button
+                        type="button"
+                        onClick={() => {
+                          if (!registrationCompleted) setEditingStudent(true);
+                        }}
+                        disabled={registrationCompleted}
+                        style={{
+                          backgroundColor: '#f59e0b',
+                          color: '#fff',
+                          border: 'none',
+                          padding: '10px 24px',
+                          borderRadius: '8px',
+                          fontSize: '14px',
+                          fontWeight: 'bold',
+                          cursor: 'pointer'
+                        }}
+                      >
+                        ✏️ تعديل بيانات الطالب
+                      </button>
+                    </div>
+                  )}
                 </>
               ) : !registrationCompleted && editingStudent ? (
                 <div style={{ marginBottom: '20px' }}>
@@ -1739,19 +1773,17 @@ if (reviewStatus?.status === 'approved') {
                     </div>
 
                     <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
-                      <label style={{ color: '#cbd5e1', fontSize: '12px', fontWeight: 'bold' }}>المديرية:</label>
-                      <select value={student.directorate_id || getDirectorateId(student.directorate_name) || ''} onChange={handleDirectorateSelection} disabled={registering} style={{ width: '100%', boxSizing: 'border-box', padding: '9px 8px', borderRadius: '8px', border: '1px solid rgba(167,139,250,0.65)', backgroundColor: '#0f172a', color: '#fff', fontSize: '13px', textAlign: 'right', direction: 'rtl' }}>
-                        <option value="">-- اختر المديرية --</option>
-                        {directoratesList.map((d) => <option key={d.id} value={d.id}>{getDirectorateLabel(d)}</option>)}
-                      </select>
+                      <label style={{ color: '#cbd5e1', fontSize: '12px', fontWeight: 'bold' }}>المديرية (غير قابلة للتعديل):</label>
+                      <div aria-readonly="true" style={{ width: '100%', boxSizing: 'border-box', padding: '9px 8px', borderRadius: '8px', border: '1px solid rgba(167,139,250,0.35)', backgroundColor: '#334155', color: '#cbd5e1', fontSize: '13px', textAlign: 'right', direction: 'rtl', minHeight: '38px' }}>
+                        {student.directorate_name || 'غير متوفر'}
+                      </div>
                     </div>
 
                     <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
-                      <label style={{ color: '#cbd5e1', fontSize: '12px', fontWeight: 'bold' }}>اسم المدرسة:</label>
-                      <select value={student.school_id || ''} onChange={handleSchoolSelection} disabled={registering || !student.directorate_id} style={{ width: '100%', boxSizing: 'border-box', padding: '10px', borderRadius: '8px', border: '1px solid rgba(167,139,250,0.65)', backgroundColor: '#0f172a', color: '#fff', fontSize: '14px', textAlign: 'right', direction: 'rtl' }}>
-                        <option value="">-- اختر المدرسة --</option>
-                        {schoolsList.map((school) => <option key={school.id} value={school.id}>{getSchoolLabel(school)}</option>)}
-                      </select>
+                      <label style={{ color: '#cbd5e1', fontSize: '12px', fontWeight: 'bold' }}>اسم المدرسة (غير قابل للتعديل):</label>
+                      <div aria-readonly="true" style={{ width: '100%', boxSizing: 'border-box', padding: '10px', borderRadius: '8px', border: '1px solid rgba(167,139,250,0.35)', backgroundColor: '#334155', color: '#cbd5e1', fontSize: '14px', textAlign: 'right', direction: 'rtl', minHeight: '40px' }}>
+                        {student.school_name || 'غير متوفر'}
+                      </div>
                     </div>
 
                     <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
@@ -1940,7 +1972,7 @@ if (reviewStatus?.status === 'approved') {
               </div>
               <button onClick={() => setMessage({ text: '', type: '' })} style={{ backgroundColor: 'transparent', border: 'none', fontSize: '18px', fontWeight: 'bold', color: '#6ee7b7', cursor: 'pointer' }}>✕</button>
             </div>
-
+            
             <div style={{ backgroundColor: '#0f172a', border: '1px solid #059669', borderRadius: '8px', padding: '18px', display: 'flex', flexDirection: 'column', gap: '12px', textAlign: 'right' }}>
               <p style={{ fontSize: '15px', color: '#f8fafc', margin: 0 }}>عزيزي الطالب: <strong style={{ color: '#60a5fa' }}>{student?.full_name_ar}</strong></p>
               <p style={{ fontSize: '15px', color: '#cbd5e1', margin: 0 }}>
@@ -1948,7 +1980,7 @@ if (reviewStatus?.status === 'approved') {
                   ? 'أنت مسجل مسبقاً في هذه الدورة.'
                   : 'تم تسجيلك الآن في النظام'}
               </p>
-
+              
               <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', fontSize: '15px', color: '#f8fafc', backgroundColor: '#1e293b', padding: '8px 12px', borderRadius: '6px', border: '1px solid #334155' }}>
                 <span>رقم الجلوس: <strong style={{ color: '#38bdf8' }}>{message.seatNumber}</strong></span>
                 <button onClick={() => copyText(message.seatNumber, 'seat')} style={{ backgroundColor: '#2563eb', color: '#fff', border: 'none', padding: '6px 14px', borderRadius: '6px', cursor: 'pointer', fontSize: '12px', fontWeight: 'bold' }}>
@@ -2169,7 +2201,7 @@ if (reviewStatus?.status === 'approved') {
                   </label>
                   <div style={{ color: '#93c5fd', fontSize: '11px', lineHeight: 1.7, marginBottom: '9px' }}>
                     المواصفات: صورة حديثة وواضحة للوجه، إضاءة مناسبة، JPG/PNG/WEBP، بحد أقصى 5MB، وأبعاد لا تقل عن 600×600 بكسل.
-                    يحق للنظام رفض الصورة إذا كانت منخفضة الجودة أو شديدة الظلام/الإضاءة أو أبعادها غير مناسبة.
+                    يحق للنظام رفض الصورة إذا كانت منخفضة الجودة أو شديدة الظلام/الإضاءة أو أبعادها غير مناسبة. 
                   </div>
                   <input
                     type="file"
