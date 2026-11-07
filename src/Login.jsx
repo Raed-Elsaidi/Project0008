@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useEffect, useState } from 'react';
 import ForgotStudentPassword from './ForgotStudentPassword';
 
 export default function Login({ supabase, onLoginSuccess, onBackHome, onBack }) {
@@ -11,6 +11,103 @@ export default function Login({ supabase, onLoginSuccess, onBackHome, onBack }) 
 
   const [showPassword, setShowPassword] = useState(false);
   const [showForgotPassword, setShowForgotPassword] = useState(false);
+
+  // فحص توفر الامتحان تلقائيًا كل 30 ثانية بعد إدخال رقم الجلوس.
+  // الفحص للقراءة فقط ولا يغيّر حالة الامتحان في قاعدة البيانات.
+  const [examAvailability, setExamAvailability] = useState('');
+  useEffect(() => {
+    const cleanNumber = String(seatingNumber || '').trim();
+    if (!supabase || !cleanNumber) {
+      setExamAvailability('');
+      return undefined;
+    }
+
+    let cancelled = false;
+    let checking = false;
+
+    const checkExamAvailability = async () => {
+      if (checking || cancelled) return;
+      checking = true;
+      try {
+        const { data: student, error: studentError } = await supabase
+          .from('students')
+          .select('branch_id, subjects')
+          .eq('seating_number', cleanNumber)
+          .maybeSingle();
+
+        if (studentError) throw studentError;
+        if (!student || !student.branch_id) {
+          if (!cancelled) setExamAvailability('تعذر العثور على بيانات الطالب أو الفرع.');
+          return;
+        }
+
+        const now = new Date();
+        const today = [
+          now.getFullYear(),
+          String(now.getMonth() + 1).padStart(2, '0'),
+          String(now.getDate()).padStart(2, '0')
+        ].join('-');
+
+        const { data: exams, error: examsError } = await supabase
+          .from('exams')
+          .select('id, subject_id, exam_date, exam_time, duration_minutes')
+          .eq('branch_id', student.branch_id)
+          .eq('exam_date', today)
+          .order('exam_time', { ascending: true });
+
+        if (examsError) throw examsError;
+
+        const selectedSubjectIds = getStudentSubjectIds(student);
+        const matchingExams = (exams || []).filter((exam) =>
+          selectedSubjectIds.includes(String(exam.subject_id))
+        );
+        const getStart = (exam) => {
+          if (!exam?.exam_date || !exam?.exam_time) return null;
+          const datePart = String(exam.exam_date).split('T')[0];
+          let timePart = String(exam.exam_time).trim();
+          if (/^\d{2}:\d{2}$/.test(timePart)) timePart += ':00';
+          const start = new Date(`${datePart}T${timePart.slice(0, 8)}`);
+          return Number.isNaN(start.getTime()) ? null : start;
+        };
+        const activeExam = matchingExams.find((exam) => {
+          const start = getStart(exam);
+          const duration = Number(exam.duration_minutes ?? 60);
+          if (!start || !Number.isFinite(duration) || duration <= 0) return false;
+          const end = new Date(start.getTime() + duration * 60000);
+          return now >= new Date(start.getTime() - 15 * 60000) && now < end;
+        });
+        const finishedExam = matchingExams.some((exam) => {
+          const start = getStart(exam);
+          const duration = Number(exam.duration_minutes ?? 60);
+          return start && Number.isFinite(duration) && duration > 0 &&
+            now >= new Date(start.getTime() + duration * 60000);
+        });
+
+        if (!cancelled) {
+          setExamAvailability(
+            activeExam
+              ? 'يوجد امتحان متاح للتحقق أو الدخول الآن.'
+              : finishedExam
+                ? 'انتهى موعد الامتحان لهذا اليوم.'
+                : 'لا يوجد امتحان متاح الآن. سيتم إعادة الفحص تلقائيًا بعد 30 ثانية.'
+          );
+        }
+      } catch (error) {
+        console.error('Automatic exam availability check failed:', error);
+        if (!cancelled) setExamAvailability('تعذر التحقق من توفر الامتحان. ستتم إعادة المحاولة بعد 30 ثانية.');
+      } finally {
+        checking = false;
+      }
+    };
+
+    checkExamAvailability();
+    const intervalId = window.setInterval(checkExamAvailability, 30000);
+
+    return () => {
+      cancelled = true;
+      window.clearInterval(intervalId);
+    };
+  }, [seatingNumber, supabase]);
 
   // =========================================================
   // الرجوع إلى الشاشة الرئيسية
@@ -42,6 +139,29 @@ export default function Login({ supabase, onLoginSuccess, onBackHome, onBack }) 
   if (showForgotPassword) {
     return <ForgotStudentPassword supabase={supabase} onBack={() => { setShowForgotPassword(false); setMessage(''); }} />;
   }
+
+  // =========================================================
+  // المواد التي اختارها الطالب عند التسجيل
+  // يدعم subjects كمصفوفة JSON أو كنص JSON.
+  // =========================================================
+  const getStudentSubjectIds = (student) => {
+    let subjects = student?.subjects;
+
+    if (typeof subjects === 'string') {
+      try {
+        subjects = JSON.parse(subjects);
+      } catch {
+        subjects = [];
+      }
+    }
+
+    if (!Array.isArray(subjects)) return [];
+
+    return subjects
+      .map((subject) => subject?.id ?? subject?.subject_id)
+      .filter((id) => id !== null && id !== undefined && String(id).trim() !== '')
+      .map((id) => String(id));
+  };
 
   // =========================================================
   // الحصول على تاريخ اليوم بصيغة YYYY-MM-DD
@@ -141,11 +261,6 @@ export default function Login({ supabase, onLoginSuccess, onBackHome, onBack }) 
   // =========================================================
   const isExamActiveNow = (exam) => {
     if (!exam) {
-      return false;
-    }
-
-    // يجب أن يكون الامتحان مفعّلًا من الإدارة
-    if (exam.is_active !== true) {
       return false;
     }
 
@@ -359,9 +474,6 @@ export default function Login({ supabase, onLoginSuccess, onBackHome, onBack }) 
           'exam_date',
           todayString
         )
-        // لا يُعرض للطالب إلا الامتحان المفعّل إداريًا (is_active = true).
-        .eq('is_active', true)
-        .eq('access_enabled', true)
         .order(
           'exam_time',
           {
@@ -381,40 +493,21 @@ export default function Login({ supabase, onLoginSuccess, onBackHome, onBack }) 
       }
 
       /*
-       * الامتحانات التي تصل إلى هذه المرحلة مفعّلة إداريًا فقط
-       * (is_active = true). لا نقوم بتحويل الامتحانات المعطّلة إلى مفعّلة
-       * تلقائيًا؛ ونحدّث فقط الامتحانات التي انتهى وقتها إلى false.
+       * إتاحة الامتحان تلقائيًا حسب الموعد:
+       * يبدأ التحقق قبل الموعد بـ15 دقيقة، وتبقى الأسئلة مقفلة
+       * حتى وقت البداية، وينتهي الدخول عند نهاية المدة.
+       * لا نعتمد على exams.is_active؛ هذا الحقل لا يجب أن يمنع
+       * الإتاحة الزمنية التلقائية للطالب.
        */
-      let examsForLogin = exams || [];
+      const selectedSubjectIds = getStudentSubjectIds(student);
+      const examsForLogin = (exams || []).filter((exam) =>
+        selectedSubjectIds.includes(String(exam.subject_id))
+      );
 
-      if (examsForLogin.length > 0) {
-        const now = new Date();
-        const updatedExams = [];
-
-        for (const exam of examsForLogin) {
-          const endDateTime = getExamEndDateTime(exam);
-          if (endDateTime && now >= endDateTime) {
-            const { error: stateError } = await supabase
-              .from('exams')
-              .update({ is_active: false })
-              .eq('id', exam.id);
-
-            if (stateError) {
-              console.error('Could not deactivate expired exam:', stateError);
-              updatedExams.push(exam);
-            }
-          } else {
-            updatedExams.push(exam);
-          }
-        }
-
-        examsForLogin = updatedExams;
-      }
-
-      // لا يوجد امتحان اليوم
+      // لا يوجد امتحان لمادة اختارها الطالب اليوم
       if (!examsForLogin || examsForLogin.length === 0) {
         showMessage(
-          'لا يوجد امتحان فعال لهذا الفرع اليوم.'
+          'لا يوجد امتحان لمادة من موادك المختارة لهذا الفرع اليوم.'
         );
 
         return;
@@ -423,12 +516,11 @@ export default function Login({ supabase, onLoginSuccess, onBackHome, onBack }) 
       // ===================================================
       // 7. البحث عن الامتحان المسموح بالدخول إليه
       // ===================================================
-      // يسمح بالدخول من 10 دقائق قبل البداية وحتى نهاية الامتحان.
+      // يسمح بالدخول من 15 دقيقة قبل البداية وحتى نهاية الامتحان.
       // قبل البداية يكون الدخول للتحقق فقط، ولا يبدأ عداد الامتحان.
       const nowForAccess = new Date();
 
       const activeExam = examsForLogin.find((exam) => {
-        if (exam.is_active !== true || exam.access_enabled !== true) return false;
 
         // لا نعتمد على access_enabled لمنع الدخول.
         // التاريخ + وقت البداية + مدة الامتحان هي التي تحدد توفره.
@@ -442,7 +534,7 @@ export default function Login({ supabase, onLoginSuccess, onBackHome, onBack }) 
         if (!startDateTime || !endDateTime) return false;
 
         const verificationStart = new Date(
-          startDateTime.getTime() - 10 * 60 * 1000
+          startDateTime.getTime() - 15 * 60 * 1000
         );
 
         return (
@@ -465,7 +557,7 @@ export default function Login({ supabase, onLoginSuccess, onBackHome, onBack }) 
             }
 
             const verificationStart = new Date(
-              startDateTime.getTime() - 10 * 60 * 1000
+              startDateTime.getTime() - 15 * 60 * 1000
             );
 
             return new Date() < verificationStart;
@@ -480,7 +572,7 @@ export default function Login({ supabase, onLoginSuccess, onBackHome, onBack }) 
           const upcoming = examsForLogin
             .filter((exam) => {
               const start = createExamDateTime(exam.exam_date, exam.exam_time);
-              return start && new Date() < new Date(start.getTime() - 10 * 60 * 1000);
+              return start && new Date() < new Date(start.getTime() - 15 * 60 * 1000);
             })
             .sort((a, b) => String(a.exam_time).localeCompare(String(b.exam_time)))[0];
           showMessage(
@@ -491,7 +583,7 @@ export default function Login({ supabase, onLoginSuccess, onBackHome, onBack }) 
 
         if (hasFinishedExam) {
           showMessage(
-            'امتحان اليوم لهذا الفرع انتهى وقته.'
+            'انتهى موعد الامتحان لهذا اليوم.'
           );
 
           return;
@@ -541,7 +633,7 @@ export default function Login({ supabase, onLoginSuccess, onBackHome, onBack }) 
 
       if (existingSubmission) {
         showMessage(
-          'لقد قمت بتقديم هذا الامتحان مسبقًا، ولا يمكن الدخول إليه مرة أخرى.'
+          'سبق لك وأن تقدمت لهذا الامتحان، ولا يجوز تقديمه مرة أخرى.'
         );
 
         return;
@@ -601,7 +693,7 @@ export default function Login({ supabase, onLoginSuccess, onBackHome, onBack }) 
         duration_minutes: Number(
           activeExam.duration_minutes ?? 60
         ),
-        // true during the 5-minute pre-start verification window.
+        // true during the 15-minute pre-start verification window.
         // The actual exam remains locked until exam_date + exam_time.
         verificationOnly: Boolean(verificationOnly),
         examStartsAt: examStartDateTime
@@ -752,6 +844,7 @@ export default function Login({ supabase, onLoginSuccess, onBackHome, onBack }) 
             تسجيل دخول الطالب
           </p>
         </div>
+
 
         {/* ==========================================
             النموذج
