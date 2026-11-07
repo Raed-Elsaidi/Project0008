@@ -2,12 +2,21 @@ import * as faceapi from '@vladmandic/face-api';
 
 export const FACE_MODELS_URL = '/models';
 
+// Share one model-loading promise across every image in this browser session.
+let modelsPromise = null;
 export async function loadFaceModels() {
-  try { await faceapi.tf.setBackend('webgl'); } catch (_) {}
-  await faceapi.tf.ready();
-  if (!faceapi.nets.tinyFaceDetector.params) await faceapi.nets.tinyFaceDetector.loadFromUri(FACE_MODELS_URL);
-  if (!faceapi.nets.faceLandmark68Net.params) await faceapi.nets.faceLandmark68Net.loadFromUri(FACE_MODELS_URL);
-  if (!faceapi.nets.faceRecognitionNet.params) await faceapi.nets.faceRecognitionNet.loadFromUri(FACE_MODELS_URL);
+  if (!modelsPromise) {
+    modelsPromise = (async () => {
+      try { await faceapi.tf.setBackend('webgl'); } catch (_) {
+        try { await faceapi.tf.setBackend('cpu'); } catch (_) {}
+      }
+      await faceapi.tf.ready();
+      if (!faceapi.nets.tinyFaceDetector.params) await faceapi.nets.tinyFaceDetector.loadFromUri(FACE_MODELS_URL);
+      if (!faceapi.nets.faceLandmark68Net.params) await faceapi.nets.faceLandmark68Net.loadFromUri(FACE_MODELS_URL);
+      if (!faceapi.nets.faceRecognitionNet.params) await faceapi.nets.faceRecognitionNet.loadFromUri(FACE_MODELS_URL);
+    })().catch((error) => { modelsPromise = null; throw error; });
+  }
+  return modelsPromise;
 }
 
 export async function descriptorFromImage(fileOrImage) {
@@ -32,10 +41,20 @@ export function euclideanDistance(a, b) {
   return Math.sqrt(sum);
 }
 
-export function faceMatch(liveDescriptor, storedDescriptor, threshold = 0.60) {
+// درجة تشغيلية للمطابقة وليست احتمالاً إحصائياً لهوية الشخص.
+// تمت مواءمة حد 85 مع حد المسافة الشائع 0.60 في face-api؛ يلزم اختبارها
+// على صور البوابة الفعلية قبل الاعتماد النهائي.
+export function faceMatch(liveDescriptor, storedDescriptor, threshold = 85) {
   const distance = euclideanDistance(liveDescriptor, storedDescriptor);
-  return { matched: Number.isFinite(distance) && distance <= threshold, distance, threshold };
+  let score = 0;
+  if (Number.isFinite(distance)) {
+    if (distance <= 0.60) score = 100 - (distance / 0.60) * 15;
+    else score = Math.max(0, 85 - ((distance - 0.60) / 0.60) * 85);
+  }
+  score = Math.round(score * 10) / 10;
+  return { matched: Number.isFinite(distance) && score >= threshold, distance, score, threshold };
 }
+
 
 export async function descriptorFromVideo(video) {
   await loadFaceModels();

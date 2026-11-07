@@ -1,12 +1,12 @@
 import React, { useState } from 'react';
 import {
   FaUser, FaIdCard, FaVenusMars, FaFlag, FaCalendarDays, FaLocationDot,
-  FaPhone, FaWhatsapp, FaMap, FaSchool, FaCodeBranch, FaLock,
+  FaPhone, FaWhatsapp, FaMap, FaSchool, FaCodeBranch,
   FaArrowRightFromBracket, FaFloppyDisk, FaRightToBracket
 } from 'react-icons/fa6';
 
 export default function StudentProfile({ supabase, onBack }) {
-  const [credentials, setCredentials] = useState({ seatingNumber: '', password: '' });
+  const [credentials, setCredentials] = useState({ nationalId: '' });
   const [student, setStudent] = useState(null);
   const [form, setForm] = useState({});
   const [loading, setLoading] = useState(false);
@@ -18,42 +18,24 @@ export default function StudentProfile({ supabase, onBack }) {
     setMessage({ type: '', text: '' });
     setLoading(true);
     try {
-      const { data, error } = await supabase.from('students').select('*').eq('seating_number', credentials.seatingNumber.trim()).maybeSingle();
+      const nationalId = credentials.nationalId.trim().replace(/[٠-٩]/g, d => String('٠١٢٣٤٥٦٧٨٩'.indexOf(d)));
+      if (!/^\d{9}$/.test(nationalId)) throw new Error('رقم الهوية يجب أن يتكون من 9 أرقام.');
+      const { data, error } = await supabase.from('allow_student').select('*').eq('national_id', nationalId).maybeSingle();
       if (error) throw error;
       if (!data) {
-        setMessage({ type: 'error', text: 'رقم الجلوس أو كلمة المرور غير صحيحة.' });
-        return;
-      }
-
-      const { data: passwordValid, error: passwordError } = await supabase.rpc('verify_student_password', {
-        p_seating_number: credentials.seatingNumber.trim(),
-        p_password: credentials.password.trim()
-      });
-      if (passwordError || passwordValid !== true) {
-        setMessage({ type: 'error', text: 'رقم الجلوس أو كلمة المرور غير صحيحة.' });
-        return;
-      }
-      if (data.profile_edit_used === true) {
-        setMessage({ type: 'error', text: 'لقد استخدمت صلاحية تعديل البيانات مسبقًا. لا يمكن التعديل مرة أخرى.' });
+        setMessage({ type: 'error', text: 'رقم الهوية غير مؤهل للتسجيل أو غير موجود في النظام.' });
         return;
       }
       setStudent(data);
       setForm({
-        full_name_ar: data.full_name_ar || '',
-        full_name_en: data.full_name_en || '',
-        gender: data.gender || '',
-        nationality: data.nationality || '',
-        birth_date: data.birth_date || '',
-        birth_place: data.birth_place || '',
-        phone_number: data.phone_number || '',
-        whatsapp_number: data.whatsapp_number || '',
-        address: data.address || '',
-        directorate_name: data.directorate_name || '',
-        school_name: data.school_name || '',
-        branch: data.branch || ''
+        gender: data.gender || '', nationality: data.nationality || '',
+        birth_date: data.birth_date || '', birth_place: data.birth_place || '',
+        phone_number: data.phone_number || '', whatsapp_number: data.whatsapp_number || '',
+        address: data.address || '', directorate_name: data.directorate_name || '',
+        school_name: data.school_name || '', branch: data.branch || ''
       });
     } catch (error) {
-      setMessage({ type: 'error', text: 'تعذر تحميل بيانات الطالب: ' + error.message });
+      setMessage({ type: 'error', text: 'تعذر البحث عن الطالب: ' + error.message });
     } finally {
       setLoading(false);
     }
@@ -64,35 +46,31 @@ export default function StudentProfile({ supabase, onBack }) {
     setSaving(true);
     setMessage({ type: '', text: '' });
     try {
-      const payload = {
-        gender: form.gender || null,
-        nationality: form.nationality || null,
-        birth_date: form.birth_date || null,
-        birth_place: form.birth_place || null,
-        phone_number: String(form.phone_number || '').replace(/\D/g, '').slice(0, 10) || null,
-        whatsapp_number: String(form.whatsapp_number || '').replace(/\D/g, '').slice(0, 14) || null,
-        address: form.address || null,
-        directorate_name: form.directorate_name || null,
-        school_name: form.school_name || null,
-        branch: form.branch || null,
-        profile_edit_used: true
-      };
-      const { data, error } = await supabase.from('students')
-        .update(payload)
-        .eq('id', student.id)
-        .eq('profile_edit_used', false)
-        .select('*')
-        .maybeSingle();
-      if (error) throw error;
-      if (!data) {
-        setMessage({ type: 'error', text: 'تم استخدام صلاحية التعديل مسبقًا أو لم يعد السجل متاحًا.' });
+      const fields = [
+        'gender', 'nationality', 'birth_date', 'birth_place', 'phone_number',
+        'whatsapp_number', 'address', 'directorate_name', 'school_name', 'branch'
+      ];
+      const changes = fields
+        .filter((field) => String(form[field] ?? '') !== String(student[field] ?? ''))
+        .map((field) => ({
+          field_name: field,
+          current_value: String(student[field] ?? ''),
+          requested_value: String(form[field] ?? '')
+        }));
+      if (!changes.length) {
+        setMessage({ type: 'error', text: 'لم تغيّر أي بيانات لإرسالها للمراجعة.' });
         return;
       }
-      setStudent(data);
-      setMessage({ type: 'success', text: 'تم حفظ بياناتك بنجاح. هذه الصلاحية كانت متاحة لمرة واحدة فقط.' });
+      const { data, error } = await supabase.rpc('submit_student_personal_data_change_request', {
+        p_national_id: credentials.nationalId.trim().replace(/[٠-٩]/g, d => String('٠١٢٣٤٥٦٧٨٩'.indexOf(d))),
+        p_changes: changes
+      });
+      if (error) throw error;
+      if (!data) throw new Error('لم يتم إنشاء طلب التعديل.');
+      setMessage({ type: 'success', text: 'تم إرسال طلبك إلى المسجّل بنجاح. لن تتغير بياناتك إلا بعد الموافقة عليه.' });
     } catch (error) {
-      if (/profile_edit_used|column/i.test(String(error.message || ''))) {
-        setMessage({ type: 'error', text: 'يجب إضافة حقل profile_edit_used إلى جدول students أولًا. يوجد ملف SQL جاهز ضمن المشروع.' });
+      if (/allow_student|national_id|رقم الهوية/i.test(String(error.message || ''))) {
+        setMessage({ type: 'error', text: error.message });
       } else {
         setMessage({ type: 'error', text: 'تعذر حفظ التعديل: ' + error.message });
       }
@@ -168,19 +146,15 @@ export default function StudentProfile({ supabase, onBack }) {
           <h2 className="sp-heading"><span className="sp-heading-icon"><FaUser size={25} /></span>تعديل بيانات الطالب</h2>
           <button type="button" onClick={onBack} className="sp-button sp-back"><FaArrowRightFromBracket /> الرئيسية</button>
         </div>
-        <p className="sp-help">يمكن تعديل البيانات مرة واحدة فقط. الاسم ورقم الهوية ثابتان ولا يمكن تعديلهما.</p>
+        <p className="sp-help">أدخل رقم الهوية للبحث عن أهليتك للتسجيل. يمكنك إرسال طلب تعديل، ولن تتغير البيانات إلا بعد موافقة المسجّل.</p>
 
         {!student ? (
           <form onSubmit={login} className="sp-form">
             <div className="sp-field-card blue">
-              <label className="sp-label" htmlFor="sp-seating-number"><span className="sp-label-icon"><FaIdCard /></span>رقم الجلوس</label>
-              <input id="sp-seating-number" className="sp-input" placeholder="أدخل رقم الجلوس" value={credentials.seatingNumber} onChange={e => setCredentials({ ...credentials, seatingNumber: e.target.value })} autoComplete="username" required />
+              <label className="sp-label" htmlFor="sp-national-id-search"><span className="sp-label-icon"><FaIdCard /></span>رقم الهوية</label>
+              <input id="sp-national-id-search" className="sp-input" placeholder="أدخل رقم الهوية المكوّن من 9 أرقام" value={credentials.nationalId} onChange={e => setCredentials({ ...credentials, nationalId: e.target.value })} inputMode="numeric" maxLength={9} required />
             </div>
-            <div className="sp-field-card pink">
-              <label className="sp-label" htmlFor="sp-password"><span className="sp-label-icon"><FaLock /></span>كلمة المرور</label>
-              <input id="sp-password" className="sp-input" type="password" placeholder="أدخل كلمة المرور" value={credentials.password} onChange={e => setCredentials({ ...credentials, password: e.target.value })} autoComplete="current-password" required />
-            </div>
-            <button disabled={loading} className="sp-button sp-primary" type="submit"><FaRightToBracket />{loading ? 'جاري التحقق...' : 'دخول وتعديل البيانات'}</button>
+            <button disabled={loading} className="sp-button sp-primary" type="submit"><FaRightToBracket />{loading ? 'جاري البحث...' : 'بحث عن بياناتي'}</button>
           </form>
         ) : (
           <>
@@ -200,7 +174,7 @@ export default function StudentProfile({ supabase, onBack }) {
                 </div>
               ))}
             </div>
-            <button type="button" onClick={save} disabled={saving} className="sp-button sp-primary" style={{ marginTop:20 }}><FaFloppyDisk />{saving ? 'جاري الحفظ...' : 'حفظ التعديل النهائي'}</button>
+            <button type="button" onClick={save} disabled={saving} className="sp-button sp-primary" style={{ marginTop:20 }}><FaFloppyDisk />{saving ? 'جاري الحفظ...' : 'إرسال طلب التعديل للمسجّل'}</button>
           </>
         )}
 

@@ -56,9 +56,53 @@ Deno.serve(async(req:Request)=>{
   if(employeeError||!employee||employee.is_active===false) return reply({ok:false,error:"حساب الموظف غير نشط."},403);
   const employeeId=Number(employee.id);
   if(action==="list"){
-    const {data,error}=await admin.from("student_support_messages").select("*").order("created_at",{ascending:false}).limit(500);
-    if(error) return reply({ok:false,error:"تعذر تحميل المراسلات. تحقق من migrations."},500);
-    return reply({ok:true,messages:data??[]});
+    const [messagesRes, studentsRes, branchesRes] = await Promise.all([
+      admin.from("student_support_messages").select("*").order("created_at",{ascending:false}).limit(500),
+      admin.from("students").select("*").order("id",{ascending:false}),
+      admin.from("branches").select("*").order("id")
+    ]);
+
+    if(messagesRes.error) {
+      console.error("staff support messages list:", messagesRes.error);
+      return reply({ok:false,error:"تعذر تحميل رسائل الدعم الفني."},500);
+    }
+    if(studentsRes.error) {
+      console.error("staff support students list:", studentsRes.error);
+      return reply({ok:false,error:"تعذر تحميل قائمة الطلاب."},500);
+    }
+    if(branchesRes.error) {
+      console.error("staff support branches list:", branchesRes.error);
+      return reply({ok:false,error:"تعذر تحميل قائمة الفروع."},500);
+    }
+
+    const nationalIds = [...new Set(
+      (messagesRes.data ?? [])
+        .filter(m => !m.student_id && m.national_id)
+        .map(m => String(m.national_id).trim())
+        .filter(id => /^\d{9}$/.test(id))
+    )];
+
+    let allowStudents = [];
+    if (nationalIds.length) {
+      const allowRes = await admin
+        .from("allow_student")
+        .select("national_id,full_name_ar,phone_number,whatsapp_number,address,directorate_name,school_name,branch")
+        .in("national_id", nationalIds);
+
+      if (allowRes.error) {
+        console.error("staff support allow_student lookup:", allowRes.error);
+        return reply({ok:false,error:"تعذر تحميل بيانات الطلاب غير المسجلين."},500);
+      }
+      allowStudents = allowRes.data ?? [];
+    }
+
+    return reply({
+      ok:true,
+      messages:messagesRes.data??[],
+      students:studentsRes.data??[],
+      branches:branchesRes.data??[],
+      allowStudents
+    });
   }
   if(action==="send"){
     const subject=String(p.subject??"").trim().slice(0,200), message=String(p.message??"").trim();

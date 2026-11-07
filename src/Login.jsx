@@ -359,6 +359,9 @@ export default function Login({ supabase, onLoginSuccess, onBackHome, onBack }) 
           'exam_date',
           todayString
         )
+        // لا يُعرض للطالب إلا الامتحان المفعّل إداريًا (is_active = true).
+        .eq('is_active', true)
+        .eq('access_enabled', true)
         .order(
           'exam_time',
           {
@@ -378,15 +381,9 @@ export default function Login({ supabase, onLoginSuccess, onBackHome, onBack }) 
       }
 
       /*
-       * مزامنة حالة الامتحان تلقائيًا:
-       *
-       * 1) قبل البداية بـ 10 دقائق: is_active = true
-       *    للسماح بالدخول والتحقق فقط.
-       * 2) من وقت البداية وحتى النهاية: is_active = true
-       *    ويصبح الامتحان متاحًا فعليًا.
-       * 3) بعد النهاية: is_active = false.
-       *
-       * access_enabled يبقى مفتاح السماح الإداري ولا يتم تغييره هنا.
+       * الامتحانات التي تصل إلى هذه المرحلة مفعّلة إداريًا فقط
+       * (is_active = true). لا نقوم بتحويل الامتحانات المعطّلة إلى مفعّلة
+       * تلقائيًا؛ ونحدّث فقط الامتحانات التي انتهى وقتها إلى false.
        */
       let examsForLogin = exams || [];
 
@@ -395,52 +392,16 @@ export default function Login({ supabase, onLoginSuccess, onBackHome, onBack }) 
         const updatedExams = [];
 
         for (const exam of examsForLogin) {
-          const startDateTime = createExamDateTime(
-            exam.exam_date,
-            exam.exam_time
-          );
           const endDateTime = getExamEndDateTime(exam);
-
-          if (!startDateTime || !endDateTime) {
-            updatedExams.push(exam);
-            continue;
-          }
-
-          const verificationStart = new Date(
-            startDateTime.getTime() - 10 * 60 * 1000
-          );
-
-          // الإتاحة تعتمد على تاريخ الامتحان ووقته ومدته.
-          // لا نمنع الطالب بسبب قيمة access_enabled القديمة في السجل.
-          const shouldBeActive =
-            now >= verificationStart &&
-            now < endDateTime;
-
-          const shouldBeInactive =
-            now >= endDateTime;
-
-          if (
-            (shouldBeActive && exam.is_active !== true) ||
-            (shouldBeInactive && exam.is_active !== false)
-          ) {
-            const nextIsActive = shouldBeActive;
-
+          if (endDateTime && now >= endDateTime) {
             const { error: stateError } = await supabase
               .from('exams')
-              .update({ is_active: nextIsActive })
+              .update({ is_active: false })
               .eq('id', exam.id);
 
             if (stateError) {
-              console.error(
-                'Could not synchronize exam is_active:',
-                stateError
-              );
+              console.error('Could not deactivate expired exam:', stateError);
               updatedExams.push(exam);
-            } else {
-              updatedExams.push({
-                ...exam,
-                is_active: nextIsActive
-              });
             }
           } else {
             updatedExams.push(exam);
@@ -467,7 +428,7 @@ export default function Login({ supabase, onLoginSuccess, onBackHome, onBack }) 
       const nowForAccess = new Date();
 
       const activeExam = examsForLogin.find((exam) => {
-        if (exam.is_active !== true) return false;
+        if (exam.is_active !== true || exam.access_enabled !== true) return false;
 
         // لا نعتمد على access_enabled لمنع الدخول.
         // التاريخ + وقت البداية + مدة الامتحان هي التي تحدد توفره.

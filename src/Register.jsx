@@ -1,10 +1,9 @@
 import React, { useEffect, useRef, useState } from 'react';
 import * as faceapi from '@vladmandic/face-api';
-import Tesseract from 'tesseract.js';
 import ministryLogo from './logo.png';
 import { generateStrongPassword, PASSWORD_POLICY_MESSAGE } from './passwordPolicy';
 import { useInstitution } from './institution';
-import { descriptorFromImage } from './BiometricUtils';
+import { descriptorFromImage, faceMatch } from './BiometricUtils';
 
 const toEnglishDigits = (value) =>
   String(value ?? '')
@@ -16,6 +15,7 @@ export default function Register({ supabase, onRegisterSuccess, onBack }) {
   const [nationalId, setNationalId] = useState('');
   const [verificationReview, setVerificationReview] = useState(null);
   const [student, setStudent] = useState(null);
+  const originalStudentRef = useRef(null);
   const [branchName, setBranchName] = useState('');
   const [registrationCycle, setRegistrationCycle] = useState(null);
   const [branchIdNum, setBranchIdNum] = useState(null);
@@ -52,6 +52,8 @@ export default function Register({ supabase, onRegisterSuccess, onBack }) {
   const [personalImage, setPersonalImage] = useState(null);
   const [identityDocumentType, setIdentityDocumentType] = useState('id');
   const [registering, setRegistering] = useState(false);
+  const [registrationProgress, setRegistrationProgress] = useState(0);
+  const [registrationStage, setRegistrationStage] = useState('');
   const [registrationCompleted, setRegistrationCompleted] = useState(false);
   const [editingStudent, setEditingStudent] = useState(false);
   const [dataConfirmed, setDataConfirmed] = useState(false);
@@ -312,6 +314,56 @@ export default function Register({ supabase, onRegisterSuccess, onBack }) {
         return;
       }
 
+// فحص حالة طلب التسجيل اليدوي أولاً
+const { data: reviewStatus, error: reviewError } = await supabase.rpc(
+  'get_student_registration_status',
+  {
+    p_national_id: enteredNationalId,
+    p_academic_year: currentServerYear,
+    p_registration_cycle: registrationCycle
+  }
+);
+
+if (reviewError) throw reviewError;
+
+if (reviewStatus?.status === 'pending') {
+  setLookupResultModal({
+    type: 'pending',
+    title: 'طلب التسجيل قيد المراجعة',
+    text: 'تم استلام طلبك، يرجى الانتظار حتى تتم مراجعته.'
+  });
+  return;
+}
+
+if (reviewStatus?.status === 'rejected') {
+  setLookupResultModal({
+    type: 'rejected',
+    title: 'تم رفض طلب التسجيل',
+    text: reviewStatus.reviewer_note || 'يرجى مراجعة المسجل.'
+  });
+  return;
+}
+
+if (reviewStatus?.status === 'approved') {
+  const { data: credentials, error: credentialsError } = await supabase.rpc(
+    'get_student_registration_credentials',
+    { p_national_id: enteredNationalId }
+  );
+
+  if (credentialsError) throw credentialsError;
+
+  const issued = Array.isArray(credentials) ? credentials[0] : credentials;
+
+  setLookupResultModal({
+    type: 'approved',
+    title: 'تمت الموافقة على تسجيلك',
+    text: 'يمكنك الآن الدخول إلى النظام باستخدام بياناتك التالية.',
+    seatNumber: issued?.seating_number || reviewStatus.seating_number || '',
+    password: issued?.temporary_password || ''
+  });
+  return;
+}
+
       const { data: existingCycle, error: existingCycleError } = await supabase
         .from('students')
         .select('id, national_id, seating_number, full_name_ar, academic_year, registration_cycle')
@@ -355,6 +407,7 @@ export default function Register({ supabase, onRegisterSuccess, onBack }) {
 
       // الطالب موجود في allow_student وغير مسجل في الدورة الحالية: نكمل معه التسجيل.
       setStudent(studentData);
+      originalStudentRef.current = { ...studentData };
       setDataConfirmed(false);
 
       const { data: allBranches, error: allBranchesError } = await supabase
@@ -616,34 +669,46 @@ export default function Register({ supabase, onRegisterSuccess, onBack }) {
   const saveStudentEdits = async () => {
     if (!student) return;
 
-    if (!/^\d{9}$/.test(String(student.national_id || '').trim())) {
-      showAlert('رقم هوية الطالب يجب أن يتكون من 9 خانات فقط.', 'error');
+    const original = originalStudentRef.current || {};
+    const requestableFields = [
+      'gender', 'birth_date', 'birth_place', 'nationality', 'address',
+      'phone_number', 'whatsapp_number', 'directorate_name', 'school_name', 'branch'
+    ];
+
+    const changed = requestableFields
+      .filter((field) => String(student[field] ?? '') !== String(original[field] ?? ''))
+      .map((field) => ({
+        field_name: field,
+        current_value: String(original[field] ?? ''),
+        requested_value: String(student[field] ?? '')
+      }));
+
+    if (!/^\d{9}$/.test(String(student.national_id || nationalId).trim())) {
+      showAlert('تعذر التحقق من رقم الهوية. أعد البحث برقم الهوية.', 'error');
+      return;
+    }
+    if (!changed.length) {
+      showAlert('لم يتم تغيير أي بيانات لإرسالها للمراجعة.', 'error');
       return;
     }
 
-    if (!branchIdNum) {
-      showAlert('يرجى اختيار الفرع من القائمة المنسدلة قبل حفظ التعديلات.', 'error');
-      return;
+    setRegistering(true);
+    try {
+      const { error } = await supabase.rpc('submit_student_personal_data_change_request', {
+        p_national_id: String(student.national_id || nationalId).trim(),
+        p_changes: changed
+      });
+      if (error) throw error;
+
+      setEditingStudent(false);
+      setStudent({ ...original });
+      showAlert('تم إرسال طلب التعديل إلى المسجل بنجاح، وستبقى بياناتك الأصلية حتى صدور القرار.', 'success');
+    } catch (error) {
+      console.error('Submit personal data change request failed:', error);
+      showAlert(error?.message || 'تعذر إرسال طلب التعديل. تحقق من اتصال قاعدة البيانات وصلاحيات الجدول.', 'error');
+    } finally {
+      setRegistering(false);
     }
-
-    if (String(student.phone_number || '').trim() && !/^\d{10}$/.test(String(student.phone_number).trim())) {
-      showAlert('رقم الهاتف يجب أن يتكون من 10 خانات فقط.', 'error');
-      return;
-    }
-
-    if (String(student.whatsapp_number || '').trim() && !/^\d{14}$/.test(String(student.whatsapp_number).trim())) {
-      showAlert('رقم الواتس يجب أن يتكون من 14 خانة فقط.', 'error');
-      return;
-    }
-
-    setStudent(prev => ({
-      ...prev,
-      branch_id: branchIdNum,
-      branch: branchName
-    }));
-
-    setEditingStudent(false);
-    setMessage({ text: '', type: '' });
   };
 
   const handleRegister = () => {
@@ -665,46 +730,75 @@ export default function Register({ supabase, onRegisterSuccess, onBack }) {
     setShowRegistrationModal(false);
   };
 
-  const validateImageFile = (file, rules) => new Promise((resolve, reject) => {
-    if (!file) return reject(new Error(rules.missingMessage || 'الملف المطلوب غير موجود'));
+  // قراءة صور الهواتف بطريقة متوافقة مع EXIF واتجاه الصورة.
+  // createImageBitmap يتعامل مع اتجاه الصور الملتقطة بالهاتف، مع fallback للمتصفحات القديمة.
+  const decodeUploadedImage = async (file) => {
+    if (!file) throw new Error('الملف المطلوب غير موجود.');
+
+    if (typeof createImageBitmap === 'function') {
+      try {
+        return await createImageBitmap(file, { imageOrientation: 'from-image' });
+      } catch (bitmapError) {
+        console.warn('createImageBitmap failed; using Image fallback.', bitmapError);
+      }
+    }
+
+    const objectUrl = URL.createObjectURL(file);
+    try {
+      const image = new Image();
+      await new Promise((resolve, reject) => {
+        image.onload = resolve;
+        image.onerror = () => reject(new Error('تعذر فك ترميز الصورة. جرّب حفظها بصيغة JPG ثم رفعها مرة أخرى.'));
+        image.src = objectUrl;
+      });
+      return image;
+    } finally {
+      URL.revokeObjectURL(objectUrl);
+    }
+  };
+
+  const validateImageFile = async (file, rules) => {
+    if (!file) throw new Error(rules.missingMessage || 'الملف المطلوب غير موجود');
 
     const allowedTypes = ['image/jpeg', 'image/png', 'image/webp'];
-    if (!allowedTypes.includes(file.type)) {
-      return reject(new Error('يرجى اختيار صورة بصيغة JPG أو PNG أو WEBP فقط.'));
+    const extensionAllowed = /\\.(jpe?g|png|webp)$/i.test(file.name || '');
+    if (!allowedTypes.includes(file.type) && !(file.type === '' && extensionAllowed)) {
+      throw new Error('يرجى اختيار صورة بصيغة JPG أو PNG أو WEBP فقط.');
     }
 
     if (file.size > 5 * 1024 * 1024) {
-      return reject(new Error('حجم الصورة يجب ألا يتجاوز 5 ميغابايت.'));
+      throw new Error('حجم الصورة يجب ألا يتجاوز 5 ميغابايت.');
     }
 
-    const image = new Image();
-    const objectUrl = URL.createObjectURL(file);
+    let image;
+    try {
+      image = await decodeUploadedImage(file);
+      const width = image.width || image.naturalWidth;
+      const height = image.height || image.naturalHeight;
+      if (!width || !height) throw new Error('تعذر تحديد أبعاد الصورة.');
 
-    image.onload = () => {
-      URL.revokeObjectURL(objectUrl);
-
-      const width = image.naturalWidth;
-      const height = image.naturalHeight;
-      const ratio = width / height;
-
-      if (width < rules.minWidth || height < rules.minHeight) {
-        return reject(new Error(rules.dimensionMessage));
+      // نقبل الاتجاهين؛ صور الهواتف قد تُحفظ عمودية رغم أن الوثيقة أفقية.
+      const ratio = Math.max(width / height, height / width);
+      const minSide = Math.min(width, height);
+      const maxSide = Math.max(width, height);
+      if (minSide < Math.min(rules.minWidth, rules.minHeight) ||
+          maxSide < Math.max(rules.minWidth, rules.minHeight)) {
+        throw new Error(rules.dimensionMessage);
       }
 
-      if (rules.minRatio && (ratio < rules.minRatio || ratio > rules.maxRatio)) {
-        return reject(new Error(rules.ratioMessage));
+      if (rules.minRatio && (ratio < Math.min(1 / rules.maxRatio, rules.minRatio) ||
+          ratio > Math.max(rules.maxRatio, 1 / rules.minRatio))) {
+        throw new Error(rules.ratioMessage);
       }
 
-      resolve({ width, height, ratio });
-    };
-
-    image.onerror = () => {
-      URL.revokeObjectURL(objectUrl);
-      reject(new Error('تعذر قراءة الصورة. يرجى رفع صورة واضحة وسليمة.'));
-    };
-
-    image.src = objectUrl;
-  });
+      return { width, height, ratio: width / height, decodedImage: image };
+    } catch (error) {
+      if (error?.message) throw error;
+      throw new Error('تعذر قراءة الصورة. تأكد أنها ملف JPG أو PNG أو WEBP سليم.');
+    } finally {
+      if (image && typeof image.close === 'function') image.close();
+    }
+  };
 
   const validatePersonalPhotoQuality = async (file) => {
     const info = await validateImageFile(file, {
@@ -943,119 +1037,65 @@ export default function Register({ supabase, onRegisterSuccess, onBack }) {
   };
 
 
-  // OCR: استخراج النص من وثيقة الهوية/الجواز.
-  // يعتمد على tesseract.js ويستخدم العربية والإنجليزية.
-  const normalizeOcrText = (value) => {
-    return String(value || '')
-      .toLowerCase()
-      .replace(/[أإآٱ]/g, 'ا')
-      .replace(/ة/g, 'ه')
-      .replace(/ى/g, 'ي')
-      .replace(/[ًٌٍَُِّْـ]/g, '')
-      .replace(/[^\u0600-\u06FFa-z0-9\s]/gi, ' ')
-      .replace(/\s+/g, ' ')
-      .trim();
-  };
+  // فحص وجود وجه واضح في صورة الهوية أو صفحة بيانات الجواز.
+  const validateIdentityDocumentFace = async (file) => {
+  if (!faceModelsReady) {
+    throw new Error(
+      faceModelsError ||
+      'لم يجهز نظام فحص الوجه بعد. انتظر لحظات ثم حاول مرة أخرى.'
+    );
+  }
 
-  const getNameTokens = (value) => {
-    const normalized = normalizeOcrText(value);
-    return normalized.split(' ').map((token) => token.trim()).filter(Boolean);
-  };
+  let image;
+  try {
+    image = await decodeUploadedImage(file);
 
-  const extractDocumentText = async (file) => {
-    if (!file) throw new Error('صورة الوثيقة غير موجودة.');
+    const width = image.width || image.naturalWidth;
+    const height = image.height || image.naturalHeight;
 
-    const result = await Tesseract.recognize(file, 'ara+eng', {
-      logger: (info) => {
-        if (info?.status) {
-          console.log(`OCR: ${info.status}`, info.progress ?? '');
-        }
-      }
-    });
-
-    return String(result?.data?.text || '').trim();
-  };
-
-  const verifyStudentNameInDocument = async (file) => {
-    const expectedName = student?.full_name_ar || '';
-    const expectedTokens = getNameTokens(expectedName);
-
-    if (!expectedTokens.length) {
-      throw new Error('اسم الطالب غير موجود في بيانات التسجيل، لذلك لا يمكن التحقق من اسم الوثيقة.');
+    if (!width || !height) {
+      throw new Error('تعذر قراءة أبعاد صورة الوثيقة.');
     }
 
-    const documentText = await extractDocumentText(file);
-    const normalizedDocumentText = normalizeOcrText(documentText);
+    const canvas = document.createElement('canvas');
+    canvas.width = width;
+    canvas.height = height;
 
-    if (!normalizedDocumentText) {
-      throw new Error(
-        'تعذر قراءة اسم الطالب من الوثيقة آليًا. يرجى رفع صورة هوية/جواز أوضح.'
-      );
+    const context = canvas.getContext('2d');
+    if (!context) {
+      throw new Error('تعذر تجهيز الصورة للفحص.');
     }
 
-    const missingTokens = expectedTokens.filter(
-      (token) => !normalizedDocumentText.includes(token)
+    context.drawImage(image, 0, 0, width, height);
+
+    const detections = await faceapi.detectAllFaces(
+      canvas,
+      new faceapi.TinyFaceDetectorOptions({
+        inputSize: 416,
+        scoreThreshold: 0.25
+      })
     );
 
-    if (missingTokens.length > 0) {
+    if (!detections || detections.length === 0) {
       throw new Error(
-        'لم يتم العثور على اسم الطالب بشكل كافٍ داخل الوثيقة. يرجى رفع صورة وثيقة واضحة يظهر فيها الاسم كاملًا.'
+        identityDocumentType === 'id'
+          ? 'لم يتم العثور على صورة وجه واضحة داخل الهوية. يرجى رفع صورة الهوية كاملة وواضحة.'
+          : 'لم يتم العثور على صورة وجه واضحة داخل صفحة بيانات الجواز. يرجى رفع صورة واضحة.'
       );
     }
 
     return {
-      matched: true,
-      documentText
+      detected: true,
+      count: detections.length,
+      score: Number(detections[0]?.score || 0)
     };
-  };
-
-  // فحص وجود وجه واضح واحد في الوثيقة فقط.
-  // لا يتم استخدام بصمة الوجه لاتخاذ قرار قبول آلي.
-  const validateIdentityDocumentFace = async (file) => {
-    if (!faceModelsReady) {
-      throw new Error(
-        faceModelsError ||
-        'لم يجهز نظام فحص الوجه بعد. انتظر لحظات ثم حاول مرة أخرى.'
-      );
+  } finally {
+    if (image && typeof image.close === 'function') {
+      image.close();
     }
+  }
+};
 
-    const objectUrl = URL.createObjectURL(file);
-    const image = new Image();
-
-    try {
-      await new Promise((resolve, reject) => {
-        image.onload = resolve;
-        image.onerror = () => reject(new Error('تعذر قراءة صورة الوثيقة.'));
-        image.src = objectUrl;
-      });
-
-      const detections = await faceapi.detectAllFaces(
-        image,
-        new faceapi.TinyFaceDetectorOptions({
-          inputSize: 416,
-          scoreThreshold: 0.25
-        })
-      );
-
-      if (!detections || detections.length === 0) {
-        throw new Error(
-          identityDocumentType === 'id'
-            ? 'لم يتم العثور على صورة وجه واضحة داخل الهوية. يرجى رفع صورة الهوية كاملة وواضحة.'
-            : 'لم يتم العثور على صورة وجه واضحة داخل صفحة بيانات الجواز. يرجى رفع صورة واضحة.'
-        );
-      }
-
-      // نسمح بأكثر من عنصر/وجه في الوثيقة لأن بعض الوثائق قد تحتوي صورًا صغيرة،
-      // لكن يجب وجود وجه قابل للكشف على الأقل.
-      return {
-        detected: true,
-        count: detections.length,
-        score: Number(detections[0]?.score || 0)
-      };
-    } finally {
-      URL.revokeObjectURL(objectUrl);
-    }
-  };
 
   const confirmRegistration = async (e) => {
     e.preventDefault();
@@ -1118,6 +1158,8 @@ export default function Register({ supabase, onRegisterSuccess, onBack }) {
     }
 
     setRegistering(true);
+    setRegistrationProgress(5);
+    setRegistrationStage('بدء التحقق من بيانات التسجيل...');
     setMessage({ text: '', type: '' });
 
     try {
@@ -1136,39 +1178,64 @@ export default function Register({ supabase, onRegisterSuccess, onBack }) {
         setEditingStudent(false);
         setDataConfirmed(false);
         setShowRegistrationModal(false);
+        const isPendingBiometric = ['manual_review_required', 'manual_review_queue_error'].includes(existingCycle.biometric_status);
         setLookupResultModal({
-          type: 'registered',
-          title: 'تم تسجيلك مسبقًا في النظام',
-          text: `عزيزي الطالب: ${student.full_name_ar || ''}`,
-          seatNumber: existingCycle.seating_number,
+          type: isPendingBiometric ? 'pending' : 'registered',
+          title: isPendingBiometric ? 'طلب تسجيلك قيد مراجعة المسجّل' : 'تم تسجيلك مسبقًا في النظام',
+          text: `عزيزي الطالب: ${student.full_name_ar || ''}${isPendingBiometric ? ' — لم يتم اعتماد الصور بعد. يرجى مراجعة المسجّل.' : ''}`,
+          seatNumber: isPendingBiometric ? '' : existingCycle.seating_number,
           password: ''
         });
         return;
       }
 
-      // التحقق الآلي الآمن من الوثيقة:
-      // 1) OCR للاسم ومقارنته مع اسم الطالب.
-      // 2) التأكد من وجود وجه واضح داخل الوثيقة.
-      // 3) التأكد من وجود وجه واضح في الصورة الشخصية.
-      // لا يتم اتخاذ قرار قبول/رفض تعليمي اعتمادًا على مطابقة الوجه البيومترية.
-      const nameVerification = await verifyStudentNameInDocument(identityImage);
-      const documentFaceVerification = await validateIdentityDocumentFace(identityImage);
-      const personalPhotoVerification = await validatePersonalPhotoQuality(personalImage);
-
+      // لا نقرأ النصوص من الهوية أو الجواز. نتحقق من وجود الوجه وجودة
+      // الصورة الشخصية، ثم نقارن بصمتي الوجه لتحديد القبول الآلي أو المراجعة.
+      setRegistrationProgress(18);
+      setRegistrationStage('فحص الصور ومطابقة الوجهين...');
+      const [documentFaceVerification, personalPhotoVerification] = await Promise.all([
+        validateIdentityDocumentFace(identityImage),
+        validatePersonalPhotoQuality(personalImage)
+      ]);
+      // Face extraction is best-effort: any inconclusive result goes to the registrar
+      // instead of leaving the registration stuck or rejecting the student.
+      const descriptorResults = await Promise.allSettled([
+        descriptorFromImage(personalImage),
+        descriptorFromImage(identityImage)
+      ]);
+      const personalDescriptor = descriptorResults[0].status === 'fulfilled' ? descriptorResults[0].value : null;
+      const identityDescriptor = descriptorResults[1].status === 'fulfilled' ? descriptorResults[1].value : null;
+      const faceComparison = personalDescriptor && identityDescriptor
+        ? faceMatch(personalDescriptor, identityDescriptor, 85)
+        : { matched: false, score: null, distance: null, threshold: 85, reason: 'تعذر استخراج بصمة أحد الوجهين؛ يلزم فحص المسجّل.' };
+      const needsManualReview = !faceComparison.matched;
+      setRegistrationProgress(48);
+      setRegistrationStage(needsManualReview ? 'تم تحويل الصور للمراجعة الإدارية...' : 'تمت مطابقة الوجهين، جاري رفع الملفات...');
       setVerificationReview({
-        nameMatched: !!nameVerification?.matched,
         documentFaceDetected: !!documentFaceVerification?.detected,
         personalFaceDetected: !!personalPhotoVerification,
-        status: 'pending_supervisor_approval'
+        faceMatch: faceComparison,
+        status: needsManualReview ? 'manual_review_required' : 'auto_approved'
       });
 
-      // إتمام التسجيل بعد نجاح فحوص البيانات والصور غير البيومترية.
-      // أي تحقق بيومتري يبقى للمراجعة والاعتماد من المشرف.
-      const identityImageUrl = await uploadStudentFile(identityImage, 'identity');
-      const personalImageUrl = await uploadStudentFile(personalImage, 'personal');
+      // يُحفظ التسجيل مع حالة المطابقة؛ الحالات الأقل من الحد تُعلّم للمراجعة الإدارية.
+      const [identityImageUrl, personalImageUrl] = await Promise.all([
+        uploadStudentFile(identityImage, 'identity'),
+        uploadStudentFile(personalImage, 'personal')
+      ]);
+      setRegistrationProgress(72);
+      setRegistrationStage('تم رفع الصور، جاري تجهيز بيانات الطالب...');
 
       const newSeatNumber = await generateSeatNumber(registrationCycle);
       const newPassword = generateStrongPassword(10);
+      const biometricReview = {
+        document_type: identityDocumentType,
+        face_match: { matched: faceComparison.matched, score: faceComparison.score, distance: faceComparison.distance, threshold: faceComparison.threshold },
+        status: faceComparison.matched ? 'auto_approved' : 'manual_review_required',
+        reviewed_at: new Date().toISOString()
+      };
+      setRegistrationProgress(86);
+      setRegistrationStage('جاري حفظ بيانات الطالب وإنشاء رقم الجلوس...');
 
       const studentRecord = {
         national_id: student.national_id,
@@ -1198,11 +1265,12 @@ export default function Register({ supabase, onRegisterSuccess, onBack }) {
         password_hash: newPassword,
         personal_image_url: personalImageUrl,
         id_card_image_url: identityImageUrl,
-        face_descriptor: await descriptorFromImage(personalImage),
-        id_face_descriptor: await descriptorFromImage(identityImage),
+        face_descriptor: personalDescriptor,
+        id_face_descriptor: identityDescriptor,
+        identity_verification: biometricReview,
         biometric_enrolled_at: new Date().toISOString(),
-        biometric_status: 'enrolled',
-        is_active: true,
+        biometric_status: faceComparison.matched ? 'auto_approved' : 'manual_review_required',
+        is_active: !needsManualReview,
         is_online: false
       };
 
@@ -1225,7 +1293,42 @@ export default function Register({ supabase, onRegisterSuccess, onBack }) {
 
       if (insertError) throw insertError;
 
+      // Create a real registrar queue item whenever the automatic check is not conclusive.
+      if (needsManualReview) {
+        const { error: reviewInsertError } = await supabase.rpc('submit_student_registration_manual_review', {
+          p_national_id: student.national_id,
+          p_academic_year: Number(currentServerYear),
+          p_registration_cycle: Number(registrationCycle),
+          p_identity_image_url: identityImageUrl,
+          p_personal_image_url: personalImageUrl,
+          p_document_type: identityDocumentType,
+          p_student_snapshot: {
+            ...studentRecord,
+            seating_number: seatToUse,
+            password_hash: undefined,
+            face_descriptor: undefined,
+            id_face_descriptor: undefined,
+            auto_check_note: faceComparison.reason || (faceComparison.score == null
+              ? 'تعذر إكمال المطابقة الآلية؛ مطلوب فحص المسجّل.'
+              : `نتيجة المطابقة التشغيلية ${faceComparison.score}% وهي أقل من الحد المطلوب 85%.`),
+            face_match: { matched: false, score: faceComparison.score, distance: faceComparison.distance, threshold: 85 }
+          }
+        });
+        if (reviewInsertError) {
+          // Keep the student inactive and surface the exact database error; do not
+          // tell the student that a review request was sent when it was not.
+          await supabase.from('students')
+            .update({ biometric_status: 'manual_review_queue_error', is_active: false })
+            .eq('national_id', student.national_id)
+            .eq('academic_year', currentServerYear)
+            .eq('registration_cycle', registrationCycle);
+          throw new Error(`تم حفظ بيانات التسجيل دون تفعيلها، لكن تعذر إنشاء طلب مراجعة الصور: ${reviewInsertError.message}`);
+        }
+      }
+
       const savedSeatNumber = seatToUse;
+      setRegistrationProgress(100);
+      setRegistrationStage(needsManualReview ? 'تم إرسال الطلب للمسجّل بنجاح.' : 'اكتمل التسجيل بنجاح.');
 
       setRegistrationCompleted(true);
       setEditingStudent(false);
@@ -1234,10 +1337,10 @@ export default function Register({ supabase, onRegisterSuccess, onBack }) {
 
       setLookupResultModal({
         type: 'success',
-        title: 'تم تسجيلك بنجاح في النظام',
-        text: `عزيزي الطالب: ${student.full_name_ar || ''}`,
-        seatNumber: savedSeatNumber,
-        password: newPassword
+        title: needsManualReview ? 'تم استلام طلبك وإرساله للمسجّل' : 'تم تسجيلك بنجاح في النظام',
+        text: `عزيزي الطالب: ${student.full_name_ar || ''}${needsManualReview ? ' — طلبك قيد مراجعة الصور. لن يتم تفعيل التسجيل أو إصدار بيانات الدخول قبل اعتماد المسجّل.' : ''}`,
+        seatNumber: needsManualReview ? '' : savedSeatNumber,
+        password: needsManualReview ? '' : newPassword
       });
 
     } catch (err) {
@@ -1253,6 +1356,10 @@ export default function Register({ supabase, onRegisterSuccess, onBack }) {
       }
     } finally {
       setRegistering(false);
+      setTimeout(() => {
+        setRegistrationProgress(0);
+        setRegistrationStage('');
+      }, 1200);
     }
   };
 
@@ -1307,7 +1414,7 @@ export default function Register({ supabase, onRegisterSuccess, onBack }) {
 
   return (
     <div style={{ color: '#fff', fontFamily: 'Noto Kufi Arabic, sans-serif', backgroundColor: '#0f172a', minHeight: '100vh', display: 'flex', flexDirection: 'column' }} dir="rtl">
-      
+
       <style>{`
         .registration-page-head {
           display:flex; flex-direction:column; align-items:center; text-align:center;
@@ -1368,7 +1475,7 @@ export default function Register({ supabase, onRegisterSuccess, onBack }) {
 
       {/* المحتوى الرئيسي */}
       <div style={{ maxWidth: '1000px', width: '100%', margin: '30px auto', padding: '0 20px', display: 'flex', flexDirection: 'column', gap: '20px', boxSizing: 'border-box' }}>
-        
+
         {/* رسالة وسط الشاشة، تختفي تلقائياً بعد ثانيتين */}
         {message.text && (
           <div
@@ -1467,7 +1574,7 @@ export default function Register({ supabase, onRegisterSuccess, onBack }) {
                   inputMode="numeric"
                   pattern="[0-9]{9}"
                   onChange={(e) => setNationalId(e.target.value.replace(/\D/g, '').slice(0, 9))}
-                  
+
                   required
                 />
                 <button type="submit" className="registration-search-button">⌕ &nbsp; بحث</button>
@@ -1482,7 +1589,7 @@ export default function Register({ supabase, onRegisterSuccess, onBack }) {
               <h2>بيانات الطالب المرشح للاشتراك</h2>
               <button onClick={() => { setStudent(null); setDataConfirmed(false); setEditingStudent(false); setRegistrationCompleted(false); }} style={{ backgroundColor: '#334155', color: '#fff', border: 'none', padding: '6px 12px', borderRadius: '6px', cursor: 'pointer', fontSize: '12px', fontWeight: 'bold' }}>بحث عن طالب آخر ↺</button>
             </div>
-            
+
             <div style={{ padding: '25px' }}>
               {!registrationCompleted && !editingStudent ? (
                 <>
@@ -1566,7 +1673,7 @@ export default function Register({ supabase, onRegisterSuccess, onBack }) {
               ) : !registrationCompleted && editingStudent ? (
                 <div style={{ marginBottom: '20px' }}>
                   <div style={{ backgroundColor: '#172554', border: '1px solid #2563eb', borderRadius: '9px', padding: '10px 14px', marginBottom: '15px', color: '#bfdbfe', fontSize: '13px', textAlign: 'center' }}>
-                    عدّل البيانات المطلوبة قبل إتمام التسجيل، ثم اضغط «حفظ التعديلات».
+                    عدّل البيانات المطلوبة ثم أرسل طلبك للمسجل. لن تتغير بياناتك إلا بعد الموافقة.
                   </div>
 
                   {/* الصف الأول: إطار طويل سماوي — العناوين خارج إطار الخانات */}
@@ -1664,7 +1771,7 @@ export default function Register({ supabase, onRegisterSuccess, onBack }) {
                       disabled={registering}
                       style={{ backgroundColor: '#16a34a', color: '#fff', border: 'none', padding: '10px 24px', borderRadius: '8px', fontWeight: 'bold', cursor: 'pointer' }}
                     >
-                      حفظ التعديلات
+                      إرسال طلب التعديل للمسجل
                     </button>
                     <button
                       type="button"
@@ -1766,9 +1873,7 @@ export default function Register({ supabase, onRegisterSuccess, onBack }) {
                     <div style={{ color: '#f8fafc', fontSize: '13px', lineHeight: 1.9 }}>
                       قبل الضغط على «التسجيل والاشتراك بالامتحانات»، يرجى التأكد من صحة جميع بياناتك.
                       <br />
-                      بعد إتمام التسجيل يمكنك تعديل <strong style={{ color: '#fde68a' }}>البيانات الشخصية المسموح بها مرة واحدة فقط</strong>.
-                      <br />
-                      <strong style={{ color: '#fca5a5' }}>الاسم الكامل بالعربية ورقم الهوية لا يمكن للطالب تعديلهما إطلاقًا</strong>، سواء قبل التسجيل النهائي أو بعده.
+                      بعد إتمام التسجيل لا يمكنك تعديل بياناتك.
                     </div>
                   </div>
 
@@ -1835,7 +1940,7 @@ export default function Register({ supabase, onRegisterSuccess, onBack }) {
               </div>
               <button onClick={() => setMessage({ text: '', type: '' })} style={{ backgroundColor: 'transparent', border: 'none', fontSize: '18px', fontWeight: 'bold', color: '#6ee7b7', cursor: 'pointer' }}>✕</button>
             </div>
-            
+
             <div style={{ backgroundColor: '#0f172a', border: '1px solid #059669', borderRadius: '8px', padding: '18px', display: 'flex', flexDirection: 'column', gap: '12px', textAlign: 'right' }}>
               <p style={{ fontSize: '15px', color: '#f8fafc', margin: 0 }}>عزيزي الطالب: <strong style={{ color: '#60a5fa' }}>{student?.full_name_ar}</strong></p>
               <p style={{ fontSize: '15px', color: '#cbd5e1', margin: 0 }}>
@@ -1843,7 +1948,7 @@ export default function Register({ supabase, onRegisterSuccess, onBack }) {
                   ? 'أنت مسجل مسبقاً في هذه الدورة.'
                   : 'تم تسجيلك الآن في النظام'}
               </p>
-              
+
               <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', fontSize: '15px', color: '#f8fafc', backgroundColor: '#1e293b', padding: '8px 12px', borderRadius: '6px', border: '1px solid #334155' }}>
                 <span>رقم الجلوس: <strong style={{ color: '#38bdf8' }}>{message.seatNumber}</strong></span>
                 <button onClick={() => copyText(message.seatNumber, 'seat')} style={{ backgroundColor: '#2563eb', color: '#fff', border: 'none', padding: '6px 14px', borderRadius: '6px', cursor: 'pointer', fontSize: '12px', fontWeight: 'bold' }}>
@@ -2064,7 +2169,7 @@ export default function Register({ supabase, onRegisterSuccess, onBack }) {
                   </label>
                   <div style={{ color: '#93c5fd', fontSize: '11px', lineHeight: 1.7, marginBottom: '9px' }}>
                     المواصفات: صورة حديثة وواضحة للوجه، إضاءة مناسبة، JPG/PNG/WEBP، بحد أقصى 5MB، وأبعاد لا تقل عن 600×600 بكسل.
-                    يحق للنظام رفض الصورة إذا كانت منخفضة الجودة أو شديدة الظلام/الإضاءة أو أبعادها غير مناسبة. وإذا كان المتصفح يدعم كشف الوجه، يجب أن تحتوي على وجه واحد واضح فقط.
+                    يحق للنظام رفض الصورة إذا كانت منخفضة الجودة أو شديدة الظلام/الإضاءة أو أبعادها غير مناسبة.
                   </div>
                   <input
                     type="file"
@@ -2094,6 +2199,17 @@ export default function Register({ supabase, onRegisterSuccess, onBack }) {
                   سيتم حفظ الصور مع ملف الطالب، وبعد إتمام التسجيل سيظهر لك رقم جلوس خاص بهذه الدورة وكلمة المرور.
                 </div>
 
+                {registering && (
+                  <div role="status" aria-live="polite" style={{ width: '100%', boxSizing: 'border-box', margin: '14px 0', padding: '12px', borderRadius: '10px', background: '#0f172a', border: '1px solid #2563eb' }}>
+                    <div style={{ display: 'flex', justifyContent: 'space-between', gap: '10px', color: '#bfdbfe', fontSize: '13px', marginBottom: '8px' }}>
+                      <span>{registrationStage || 'جاري التسجيل...'}</span>
+                      <strong>{registrationProgress}%</strong>
+                    </div>
+                    <div style={{ height: '10px', background: '#334155', borderRadius: '99px', overflow: 'hidden' }}>
+                      <div style={{ width: `${registrationProgress}%`, height: '100%', background: '#22c55e', transition: 'width .35s ease', borderRadius: '99px' }} />
+                    </div>
+                  </div>
+                )}
                 <div style={{ display: 'flex', gap: '10px', justifyContent: 'center' }}>
                   <button
                     type="submit"

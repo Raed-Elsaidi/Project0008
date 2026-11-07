@@ -58,12 +58,14 @@ export default function App() {
         <Login
           supabase={supabase}
           onLoginSuccess={(studentInfo, examInfo) => {
+            // لا ننتقل للتحقق البيومتري إلا بامتحان حقيقي ومفعّل صراحةً.
+            if (!examInfo || examInfo.is_active !== true || examInfo.access_enabled !== true) {
+              setCurrentExam(null);
+              setCurrentScreen('login');
+              return;
+            }
             setUserData(studentInfo || null);
-            setCurrentExam(examInfo || {
-              id: 3,
-              title: 'امتحان شهادة الدراسة الثانوية العامة',
-              subject: 'تكنولوجيا'
-            });
+            setCurrentExam(examInfo);
             setCurrentScreen('biometricGate');
           }}
           onBackHome={() => setCurrentScreen('welcome')}
@@ -102,8 +104,17 @@ export default function App() {
         <DeviceReadiness supabase={supabase} student={userData} onBack={() => setCurrentScreen('examPortal')} />
       )}
 
-      {currentScreen === 'biometricGate' && (
+      {currentScreen === 'biometricGate' && currentExam?.is_active === true && currentExam?.access_enabled === true && (
         <PreExamBiometricGate supabase={supabase} student={userData} exam={currentExam} onSuccess={() => setCurrentScreen('exam')} onBack={() => setCurrentScreen('welcome')} />
+      )}
+      {currentScreen === 'biometricGate' && (currentExam?.is_active !== true || currentExam?.access_enabled !== true) && (
+        <div dir="rtl" style={{ minHeight: '60vh', display: 'grid', placeItems: 'center', padding: 24, color: '#fff', textAlign: 'center' }}>
+          <div>
+            <h2>لا يوجد امتحان فعال</h2>
+            <p>هذا الامتحان غير مفعّل من الإدارة، ولا يمكن بدء التحقق أو الدخول إليه.</p>
+            <button onClick={() => setCurrentScreen('login')}>العودة لتسجيل الدخول</button>
+          </div>
+        </div>
       )}
 
       {currentScreen === 'exam' && (
