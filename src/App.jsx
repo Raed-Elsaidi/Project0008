@@ -8,7 +8,6 @@ import Exam from './exam';
 import Result from './result';
 import Password from './password';
 import StudentProfile from './StudentProfile';
-import NotesBook from './NotesBook';
 import SupportCenter from './SupportCenter';
 import StudentGuides from './StudentGuides';
 import StudentNotifications from './StudentNotifications';
@@ -126,9 +125,6 @@ export default function App() {
         />
       )}
 
-      {currentScreen === 'notes' && (
-        <NotesBook onBack={() => setCurrentScreen('welcome')} />
-      )}
 
       {currentScreen === 'result' && (
         <Result supabase={supabase} studentData={userData} onBack={() => setCurrentScreen('welcome')} />
