@@ -13,6 +13,10 @@
   "author": "",
   "license": "ISC",
   "dependencies": {
+    "@capacitor/android": "^8.6.0",
+    "@capacitor/cli": "^8.6.0",
+    "@capacitor/core": "^8.6.0",
+    "@capacitor/privacy-screen": "^2.0.1",
     "@supabase/supabase-js": "^2.112.3",
     "@vladmandic/face-api": "^1.7.15",
     "cors": "^2.8.6",

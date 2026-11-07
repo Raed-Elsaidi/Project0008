@@ -3,3 +3,21 @@ dist/
 .env
 .env.*
 !/.env.example
+
+# Exclude NotesBook files
+/public/Notes_Page_1_Cover.png
+/public/Notes_Page_2_Cover_Clean-1.png
+/public/Notes_Page_3_Notes.png
+/public/notes-page.png
+/public/page3.jpg
+/public/page3.png
+/public/page3_clean.png
+/public/page3_fixed.png
+/public/page4.png
+/src/NotesBook.jsx
+
+# Exclude backups
+backups/
+*.backup
+*.bak
+*.old
