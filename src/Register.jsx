@@ -1619,7 +1619,7 @@ export default function Register({ supabase, onRegisterSuccess, onBack }) {
           <div style={{ backgroundColor: '#1e293b', borderRadius: '12px', boxShadow: '0 10px 15px -3px rgba(0,0,0,0.3)', border: '1px solid #334155', overflow: 'hidden' }}>
             <div style={{ backgroundColor: '#0f172a', color: '#fff', padding: '15px 20px', display: 'flex', justifyContent: 'space-between', alignItems: 'center', fontSize: '16px', fontWeight: 'bold', borderBottom: '1px solid #334155' }}>
               <h2>بيانات الطالب المرشح للاشتراك</h2>
-              <button onClick={() => { setStudent(null); setDataConfirmed(false); setEditingStudent(false); setPersonalChangeRequestSent(false); setRegistrationCompleted(false); }} style={{ backgroundColor: '#334155', color: '#fff', border: 'none', padding: '6px 12px', borderRadius: '6px', cursor: 'pointer', fontSize: '12px', fontWeight: 'bold' }}>بحث عن طالب آخر ↺</button>
+              <button type="button" onClick={() => handleCheck({ preventDefault: () => {} })} style={{ backgroundColor: '#334155', color: '#fff', border: 'none', padding: '6px 12px', borderRadius: '6px', cursor: 'pointer', fontSize: '12px', fontWeight: 'bold' }}>🔄 تحديث</button>
             </div>
             
             <div style={{ padding: '25px' }}>
