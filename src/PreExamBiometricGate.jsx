@@ -235,7 +235,7 @@ export default function PreExamBiometricGate({ supabase, student, exam, onSucces
             muted
             playsInline
             autoPlay
-            style={{ display: 'block', width: '100%', height: '100%', objectFit: 'cover', objectPosition: 'center center', background: '#020617', transform: 'scaleX(-1)' }}
+            style={{ display: 'block', width: '100%', height: '100%', objectFit: 'contain', background: '#020617', transform: 'scaleX(-1)' }}
           />
         </div>
 
