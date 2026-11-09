@@ -5,8 +5,6 @@ import React, {
   useState
 } from 'react';
 
-import { Capacitor } from '@capacitor/core';
-import { PrivacyScreen } from '@capacitor/privacy-screen';
 import ExamHeader from './ExamHeader';
 import successImage from './success.jpg';
 import { createMonitoringSessionId, saveOfflineChunk, syncOfflineChunks } from './offlineExamRecorder';
@@ -40,11 +38,6 @@ export default function Exam({
   const [message, setMessage] = useState('');
   const [messageType, setMessageType] = useState('');
 
-  const [warnings, setWarnings] = useState(0);
-  const MAX_WARNINGS = 3;
-
-  const [showWarning, setShowWarning] = useState(false);
-  const [warningText, setWarningText] = useState('');
 
   const [monitoringActive, setMonitoringActive] = useState(false);
 
@@ -378,6 +371,115 @@ export default function Exam({
     );
   };
 
+
+  // =========================================================
+  // ANDROID SCREEN-CAPTURE PROTECTION (Capacitor)
+  // Enabled only during the scheduled exam window.
+  // Chrome/web browsers cannot enforce FLAG_SECURE.
+  // =========================================================
+  useEffect(() => {
+    let cancelled = false;
+    let startTimer = null;
+    let endTimer = null;
+    let plugin = null;
+
+    const start = getExamStartTime(examData);
+    const end = getExamEndTime(examData);
+
+    const disableProtection = async () => {
+      if (!plugin) return;
+      try {
+        await plugin.PrivacyScreen.disable();
+      } catch (error) {
+        console.warn('Could not disable Android privacy screen:', error);
+      }
+    };
+
+    const enableProtection = async () => {
+      if (cancelled || isSubmitted || !examData) return;
+      try {
+        const [{ Capacitor }, privacyModule] = await Promise.all([
+          import('@capacitor/core'),
+          import('@capacitor/privacy-screen')
+        ]);
+        if (cancelled || !Capacitor.isNativePlatform()) return;
+        plugin = privacyModule;
+        await plugin.PrivacyScreen.enable({
+          android: {
+            dimBackground: true,
+            privacyModeOnActivityHidden: 'splash'
+          },
+          ios: { blurEffect: 'dark' }
+        });
+      } catch (error) {
+        console.error('Native screen protection could not be enabled:', error);
+      }
+    };
+
+    if (!start || !end || isSubmitted || !examData) {
+      // When no active exam session exists, ensure a previous native
+      // protection state is not accidentally left enabled.
+      (async () => {
+        try {
+          const [{ Capacitor }, privacyModule] = await Promise.all([
+            import('@capacitor/core'),
+            import('@capacitor/privacy-screen')
+          ]);
+          if (!cancelled && Capacitor.isNativePlatform()) {
+            plugin = privacyModule;
+            await disableProtection();
+          }
+        } catch (error) {
+          console.warn('Native privacy screen cleanup skipped:', error);
+        }
+      })();
+      return undefined;
+    }
+
+    const updateProtectionForTime = async () => {
+      if (cancelled) return;
+      const now = Date.now();
+      if (now >= start.getTime() && now < end.getTime()) {
+        await enableProtection();
+      } else if (now >= end.getTime() || isSubmitted) {
+        await disableProtection();
+      }
+    };
+
+    (async () => {
+      try {
+        const [{ Capacitor }, privacyModule] = await Promise.all([
+          import('@capacitor/core'),
+          import('@capacitor/privacy-screen')
+        ]);
+        if (cancelled || !Capacitor.isNativePlatform()) return;
+        plugin = privacyModule;
+        await updateProtectionForTime();
+        const now = Date.now();
+        if (now < start.getTime()) {
+          startTimer = window.setTimeout(
+            updateProtectionForTime,
+            Math.min(start.getTime() - now, 2147483000)
+          );
+        }
+        const untilEnd = end.getTime() - now;
+        if (untilEnd > 0) {
+          endTimer = window.setTimeout(disableProtection, Math.min(untilEnd, 2147483000));
+        }
+      } catch (error) {
+        console.error('Capacitor privacy screen plugin is unavailable:', error);
+      }
+    })();
+
+    return () => {
+      cancelled = true;
+      if (startTimer) window.clearTimeout(startTimer);
+      if (endTimer) window.clearTimeout(endTimer);
+      // Leaving the exam screen always releases the native secure flag.
+      disableProtection();
+    };
+  }, [examData, isSubmitted]);
+
   // =========================================================
   // RESOLVE SUBJECT NAME
   // =========================================================
@@ -431,7 +533,7 @@ export default function Exam({
 
       try {
         let currentExam =
-          (initialExam && initialExam.is_active === true && initialExam.access_enabled === true) ? initialExam : null;
+          initialExam || null;
 
         if (!currentExam) {
           const studentBranchId =
@@ -441,9 +543,7 @@ export default function Exam({
 
           let query = supabase
             .from('exams')
-            .select('*')
-            .eq('is_active', true)
-            .eq('access_enabled', true);
+            .select('*');
 
           if (studentBranchId) {
             query = query.or(
@@ -503,14 +603,6 @@ export default function Exam({
         if (!currentExam) {
           throw new Error(
             'لا يوجد امتحان فعال في هذا الوقت. يرجى العودة إلى صفحة تسجيل الدخول.'
-          );
-        }
-
-        // تحقق إلزامي حتى لو وصل الامتحان من شاشة سابقة عبر initialExam.
-        // لا يُسمح بفتح أي امتحان حالته false أو غير مفعّلة صراحةً.
-        if (currentExam.is_active !== true || currentExam.access_enabled !== true) {
-          throw new Error(
-            'هذا الامتحان غير مفعّل من الإدارة. لا يمكن الدخول إليه.'
           );
         }
 
@@ -1135,84 +1227,9 @@ export default function Exam({
           savedAnswers
         );
 
-        // ترتيب عشوائي ثابت لكل محاولة: نغيّر ترتيب الأسئلة داخل
-        // القسم/الفرع/نوع السؤال فقط، ونغيّر ترتيب الخيارات للعرض دون
-        // تعديل options الأصلية التي تعتمد عليها آلية تصحيح الإجابات.
-        const shuffleStorageKey = `exam_shuffle_${seatingNumber}_${currentExamId}`;
-        let shuffleSeed = null;
-        try {
-          shuffleSeed = localStorage.getItem(shuffleStorageKey);
-          if (!shuffleSeed) {
-            shuffleSeed = `${Date.now()}_${Math.random().toString(36).slice(2)}`;
-            localStorage.setItem(shuffleStorageKey, shuffleSeed);
-          }
-        } catch (shuffleStorageError) {
-          console.warn('Could not persist exam shuffle seed:', shuffleStorageError);
-          shuffleSeed = `${Date.now()}_${String(seatingNumber || '')}_${String(currentExamId || '')}`;
-        }
-
-        const seededRandom = (key) => {
-          let state = 0;
-          const source = `${shuffleSeed}:${key}`;
-          state = 2166136261;
-          for (let i = 0; i < source.length; i += 1) {
-            state ^= source.charCodeAt(i);
-            state = Math.imul(state, 16777619);
-          }
-          return () => {
-            state += 0x6D2B79F5;
-            let t = state;
-            t = Math.imul(t ^ (t >>> 15), t | 1);
-            t ^= t + Math.imul(t ^ (t >>> 7), t | 61);
-            return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
-          };
-        };
-
-        const shuffleWithKey = (items, key) => {
-          const result = [...items];
-          const random = seededRandom(key);
-          for (let i = result.length - 1; i > 0; i -= 1) {
-            const j = Math.floor(random() * (i + 1));
-            [result[i], result[j]] = [result[j], result[i]];
-          }
-          return result;
-        };
-
-        const questionGroups = new Map();
-        finalQuestions.forEach((q, index) => {
-          const groupKey = `${q?.section_index ?? 'section-0'}__${q?.optional_branch_index ?? 'normal'}__${q?.type_index ?? 'type-0'}`;
-          if (!questionGroups.has(groupKey)) questionGroups.set(groupKey, []);
-          questionGroups.get(groupKey).push(index);
-        });
-
-        const shuffledQuestions = [...finalQuestions];
-        questionGroups.forEach((indices, groupKey) => {
-          const shuffledGroup = shuffleWithKey(
-            indices.map(index => finalQuestions[index]),
-            `questions:${groupKey}`
-          );
-          indices.forEach((targetIndex, groupIndex) => {
-            shuffledQuestions[targetIndex] = shuffledGroup[groupIndex];
-          });
-        });
-
-        const questionsWithShuffledOptions = shuffledQuestions.map(q => {
-          const originalOptions = Array.isArray(q?.options)
-            ? q.options
-            : Array.isArray(q?.choices) ? q.choices : [];
-          if (originalOptions.length < 2) return q;
-          return {
-            ...q,
-            // display_options للعرض فقط؛ لا نغيّر options/choices الأصلية
-            // حتى تبقى مفاتيح الإجابات الصحيحة والتصحيح كما هي.
-            display_options: shuffleWithKey(
-              originalOptions,
-              `options:${q.id}`
-            )
-          };
-        });
-
-        setQuestions(questionsWithShuffledOptions);
+        setQuestions(
+          finalQuestions
+        );
 
         const realEndTime =
           examEndTime.getTime();
@@ -1381,79 +1398,6 @@ export default function Exam({
     isSubmitted,
     examData
   ]);
-
-  // =========================================================
-  // EXAM PRIVACY PROTECTION
-  // =========================================================
-
-  useEffect(() => {
-    if (loading || isSubmitted || !examData || !Capacitor.isNativePlatform()) {
-      return;
-    }
-
-    const startTime = getExamStartTime(examData);
-    const endTime = endTimestampRef.current;
-
-    if (!startTime || !endTime) return;
-
-    let disposed = false;
-    let enabled = false;
-    let busy = false;
-
-    const updateProtection = async () => {
-      if (disposed || busy) return;
-
-      const now = Date.now();
-      const shouldProtect =
-        now >= startTime.getTime() &&
-        now < endTime &&
-        !isSubmitted;
-
-      if (shouldProtect === enabled) return;
-
-      busy = true;
-      try {
-        if (shouldProtect) {
-          await PrivacyScreen.enable({
-            android: {
-              preventScreenshots: true,
-              dimBackground: true,
-              privacyModeOnActivityHidden: 'splash'
-            },
-            ios: { blurEffect: 'dark' }
-          });
-          enabled = true;
-        } else {
-          await PrivacyScreen.disable();
-          enabled = false;
-        }
-      } catch (error) {
-        console.error('Exam privacy protection error:', error);
-      } finally {
-        busy = false;
-      }
-
-      if (disposed && enabled) {
-        try {
-          await PrivacyScreen.disable();
-          enabled = false;
-        } catch (error) {
-          console.error('Privacy cleanup error:', error);
-        }
-      }
-    };
-
-    updateProtection();
-    const interval = setInterval(updateProtection, 1000);
-
-    return () => {
-      disposed = true;
-      clearInterval(interval);
-      PrivacyScreen.disable().catch(error => {
-        console.error('Privacy cleanup error:', error);
-      });
-    };
-  }, [loading, isSubmitted, examData]);
 
   // =========================================================
   // SAVE ANSWERS
@@ -1664,62 +1608,24 @@ export default function Exam({
       return;
     }
 
-    const registerWarning =
-      (reason) => {
-        if (
-          submissionStartedRef.current
-        ) {
-          return;
-        }
+    const registerWarning = (reason) => {
+      if (submissionStartedRef.current) return;
 
-        setWarnings(
-          (prev) => {
-            const next =
-              Math.min(
-                prev + 1,
-                MAX_WARNINGS
-              );
-
-            // تسجيل حالة الغش الفعلية في قاعدة البيانات حتى تظهر
-            // مباشرة في شاشة حالات الغش والإحصائيات.
-            supabase
-              .from('cheating_cases')
-              .insert({
-                student_id:
-                  resolvedStudent?.id ?? null,
-                exam_id:
-                  examData?.id ?? null,
-                violation_type:
-                  'انتقال خارج شاشة الامتحان',
-                occurred_at:
-                  new Date().toISOString(),
-                case_status:
-                  'pending'
-              })
-              .then(({ error }) => {
-                if (error) {
-                  console.warn(
-                    'تعذر تسجيل حالة الغش:',
-                    error
-                  );
-                }
-              });
-
-            setWarningText(
-              `${reason} — التحذير ${next} من ${MAX_WARNINGS}`
-            );
-
-            setShowWarning(
-              true
-            );
-
-            // التحذيرات تسجل فقط ولا تؤدي إلى تسليم الامتحان تلقائيًا.
-            // التسليم التلقائي يحدث فقط عند انتهاء الوقت.
-
-            return next;
-          }
-        );
-      };
+      // لا نعرض أرقاماً أو نوافذ تحذير للطالب.
+      // تُسجل المخالفة في قاعدة البيانات لتظهر في شاشة المراقب فقط.
+      supabase
+        .from('cheating_cases')
+        .insert({
+          student_id: resolvedStudent?.id ?? null,
+          exam_id: examData?.id ?? null,
+          violation_type: reason || 'انتقال خارج شاشة الامتحان',
+          occurred_at: new Date().toISOString(),
+          case_status: 'pending'
+        })
+        .then(({ error }) => {
+          if (error) console.warn('تعذر تسجيل حالة المخالفة:', error);
+        });
+    };
 
     const handleVisibility =
       () => {
@@ -2884,10 +2790,7 @@ export default function Exam({
         index
       );
 
-      window.scrollTo({
-        top: 0,
-        behavior: 'smooth'
-      });
+      // Keep the student's current scroll position when changing questions.
     };
 
   const examStartForRender = getExamStartTime(examData);
@@ -2939,20 +2842,10 @@ export default function Exam({
           question
         );
 
-      // صورة السؤال محفوظة في بنك الأسئلة باسم image_url.
-      // ندعم أسماء الحقول البديلة للتوافق مع الأسئلة القديمة ونسخ الهيكل.
-      const questionImageUrl = String(
-        question?.image_url ||
-        question?.image ||
-        question?.imageUrl ||
-        question?.question_image_url ||
-        ''
-      ).trim();
-
       const options =
-        Array.isArray(question?.display_options)
-          ? question.display_options
-          : getOptions(question);
+        getOptions(
+          question
+        );
 
       const answer =
         getAnswerValue(
@@ -3108,43 +3001,6 @@ export default function Exam({
               ? renderCompletionQuestionText(questionText)
               : questionText}
           </div>
-
-          {/* QUESTION IMAGE: show the image saved with the question, below its text. */}
-          {questionImageUrl && (
-            <div
-              style={{
-                width: '100%',
-                display: 'flex',
-                justifyContent: 'center',
-                alignItems: 'center',
-                margin: '0 0 20px',
-                padding: '10px',
-                backgroundColor: '#0f172a',
-                border: '1px solid #334155',
-                borderRadius: '8px',
-                boxSizing: 'border-box'
-              }}
-            >
-              <img
-                src={questionImageUrl}
-                alt={`صورة السؤال ${currentQuestion + 1}`}
-                loading="eager"
-                style={{
-                  display: 'block',
-                  maxWidth: '100%',
-                  width: 'auto',
-                  height: 'auto',
-                  maxHeight: '520px',
-                  objectFit: 'contain',
-                  borderRadius: '6px'
-                }}
-                onError={(event) => {
-                  console.error('Failed to load question image:', questionImageUrl);
-                  event.currentTarget.style.display = 'none';
-                }}
-              />
-            </div>
-          )}
 
           {/* TRUE / FALSE */}
 
@@ -3663,12 +3519,6 @@ export default function Exam({
               .map(q => `${q.section_index}__${q.optional_branch_index ?? 'normal'}__${q.type_index}`)
           ).size
         }
-        warnings={
-          warnings
-        }
-        MAX_WARNINGS={
-          MAX_WARNINGS
-        }
         handleLogout={
           handleExitExam
         }
@@ -3679,29 +3529,13 @@ export default function Exam({
       />
 
       <main
-        onCopy={event => event.preventDefault()}
-        onCut={event => event.preventDefault()}
-        onContextMenu={event => event.preventDefault()}
-        onSelectStart={event => event.preventDefault()}
-        onDragStart={event => event.preventDefault()}
-        onKeyDown={event => {
-          if (
-            (event.ctrlKey || event.metaKey) &&
-            ['c', 'x', 'a'].includes(event.key.toLowerCase())
-          ) {
-            event.preventDefault();
-          }
-        }}
         style={{
           maxWidth:
             '1200px',
           margin:
             '0 auto',
           padding:
-            '20px',
-          userSelect: 'none',
-          WebkitUserSelect: 'none',
-          WebkitTouchCallout: 'none'
+            '20px'
         }}
       >
         {message && (
@@ -3770,31 +3604,7 @@ export default function Exam({
               : '● المراقبة غير متاحة'}
           </span>
 
-          <span
-            style={{
-              color:
-                '#94a3b8',
-              fontSize:
-                '13px'
-            }}
-          >
-            التحذيرات:{' '}
 
-            <strong
-              style={{
-                color:
-                  '#fbbf24',
-                direction:
-                  'ltr',
-                display:
-                  'inline-block'
-              }}
-            >
-              {warnings}
-              /
-              {MAX_WARNINGS}
-            </strong>
-          </span>
         </div>
 
         <video
@@ -4157,105 +3967,7 @@ export default function Exam({
         )}
       </main>
 
-      {showWarning && (
-        <div
-          style={{
-            position:
-              'fixed',
-            inset:
-              0,
-            backgroundColor:
-              'rgba(0,0,0,0.75)',
-            display:
-              'flex',
-            alignItems:
-              'center',
-            justifyContent:
-              'center',
-            zIndex:
-              9998,
-            padding:
-              '20px'
-          }}
-        >
-          <div
-            style={{
-              width:
-                '100%',
-              maxWidth:
-                '450px',
-              backgroundColor:
-                '#1e293b',
-              border:
-                '2px solid #f59e0b',
-              borderRadius:
-                '12px',
-              padding:
-                '30px',
-              textAlign:
-                'center',
-              direction:
-                'rtl'
-            }}
-          >
-            <div
-              style={{
-                fontSize:
-                  '45px'
-              }}
-            >
-              ⚠️
-            </div>
 
-            <h3
-              style={{
-                color:
-                  '#fbbf24'
-              }}
-            >
-              تحذير
-            </h3>
-
-            <p
-              style={{
-                color:
-                  '#fff',
-                lineHeight:
-                  '1.8'
-              }}
-            >
-              {warningText}
-            </p>
-
-            <button
-              type="button"
-              onClick={() =>
-                setShowWarning(
-                  false
-                )
-              }
-              style={{
-                backgroundColor:
-                  '#f59e0b',
-                color:
-                  '#111827',
-                border:
-                  'none',
-                padding:
-                  '10px 25px',
-                borderRadius:
-                  '7px',
-                cursor:
-                  'pointer',
-                fontWeight:
-                  'bold'
-              }}
-            >
-              فهمت
-            </button>
-          </div>
-        </div>
-      )}
 
       {showSubmitModal && (
         <div

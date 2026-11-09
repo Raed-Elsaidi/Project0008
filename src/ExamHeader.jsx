@@ -14,13 +14,21 @@ export default function ExamHeader({
   answeredCount,
   unansweredCount,
   reviewCount,
-  warnings,
-  MAX_WARNINGS = 3,
   handleLogout,
   styles: externalStyles,
   supabase
 }) {
   const currentYear = new Date().getFullYear();
+  const studentCycle = Number(
+    student?.registration_cycle ??
+    student?.cycle_id ??
+    student?.registration_cycle_id
+  );
+  const cycleLabel = ({
+    1: 'الأولى',
+    2: 'الثانية',
+    3: 'الثالثة'
+  })[studentCycle] || 'غير محددة';
   const institution = useInstitution(supabase);
   const styles = externalStyles || defaultStyles;
 
@@ -287,11 +295,6 @@ export default function ExamHeader({
           تسجيل الخروج
         </button>
 
-        {warnings > 0 && (
-          <div style={styles.warningBadge}>
-            ⚠️ المخالفات: {warnings} / {MAX_WARNINGS}
-          </div>
-        )}
       </div>
 
       {/* عنوان الامتحان في وسط الشاشة */}
@@ -321,7 +324,7 @@ export default function ExamHeader({
           الإدارة العامة للقياس والتقويم والامتحانات
         </div>
         <div style={styles.subMinistry}>
-          امتحان إتمام شهادة الثانوية العامة لسنة - {currentYear}
+          امتحان نهاية الدراسة الثانوية العامة الدورة {cycleLabel} للعام {currentYear}
         </div>
 
         <div style={styles.examTitle}>
@@ -422,15 +425,6 @@ const defaultStyles = {
     padding: '6px 14px',
     borderRadius: '6px',
     cursor: 'pointer',
-    fontWeight: 'bold'
-  },
-
-  warningBadge: {
-    backgroundColor: '#fef3c7',
-    color: '#92400e',
-    padding: '5px 10px',
-    borderRadius: '6px',
-    fontSize: '13px',
     fontWeight: 'bold'
   },
 

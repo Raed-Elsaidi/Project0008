@@ -56,8 +56,6 @@ export default function Register({ supabase, onRegisterSuccess, onBack }) {
   const [registrationStage, setRegistrationStage] = useState('');
   const [registrationCompleted, setRegistrationCompleted] = useState(false);
   const [editingStudent, setEditingStudent] = useState(false);
-  // إخفاء زر تعديل البيانات بعد تقديم أول طلب، مع استعادة الحالة من قاعدة البيانات عند إعادة البحث.
-  const [personalChangeRequestSent, setPersonalChangeRequestSent] = useState(false);
   const [dataConfirmed, setDataConfirmed] = useState(false);
   const [faceModelsReady, setFaceModelsReady] = useState(false);
   const [faceModelsLoading, setFaceModelsLoading] = useState(true);
@@ -308,49 +306,14 @@ export default function Register({ supabase, onRegisterSuccess, onBack }) {
     }
 
     try {
-      setPersonalChangeRequestSent(false);
-      setEditingStudent(false);
-
-      // 1) مصدر بيانات الطالب قبل التسجيل وإصدار رقم الجلوس هو allow_student فقط.
+      // 1) أولاً: البحث في جدول students.
+      // نتحقق من الدورة المختارة حتى يستطيع الطالب التسجيل في دورة جديدة
+      // إذا كان قد سجل في دورة سابقة.
       if (!registrationCycle || !isCycleOpen(registrationCycle)) {
         showAlert('يرجى اختيار دورة تسجيل متاحة حاليًا قبل البحث عن الطالب.', 'error');
         return;
       }
 
-      const { data: studentData, error: studentError } = await supabase
-        .from('allow_student')
-        .select('*')
-        .eq('national_id', enteredNationalId)
-        .maybeSingle();
-
-      if (studentError) throw studentError;
-
-      if (!studentData) {
-        setLookupResultModal({
-          type: 'not-found',
-          title: 'لا يوجد لك بيانات بالنظام',
-          text: 'يرجى مراجعة أقرب مديرية تربية وتعليم.'
-        });
-        return;
-      }
-
-      // إذا سبق للطالب تقديم أي طلب تعديل، لا نعرض زر التعديل مرة أخرى.
-      const { data: previousPersonalRequest, error: previousPersonalRequestError } = await supabase
-        .from('student_personal_data_change_requests')
-        .select('id')
-        .eq('national_id', String(studentData.national_id || enteredNationalId).trim())
-        .limit(1)
-        .maybeSingle();
-
-      if (previousPersonalRequestError) {
-        console.warn('Could not check previous personal-data requests:', previousPersonalRequestError);
-        setPersonalChangeRequestSent(false);
-      } else {
-        setPersonalChangeRequestSent(Boolean(previousPersonalRequest));
-      }
-
-      // بعد وجود سجل allow_student فقط، نتحقق هل سبق إصدار رقم جلوس
-      // لهذا الطالب في الدورة الحالية؛ سجل students يمثل التسجيل المكتمل.
       const { data: existingCycle, error: existingCycleError } = await supabase
         .from('students')
         .select('id, national_id, seating_number, full_name_ar, academic_year, registration_cycle')
@@ -362,17 +325,37 @@ export default function Register({ supabase, onRegisterSuccess, onBack }) {
       if (existingCycleError) throw existingCycleError;
 
       if (existingCycle) {
+        // مسجل مسبقاً في الدورة الحالية: لا نبحث في allow_student ولا نطلب صوراً.
         setLookupResultModal({
           type: 'registered',
           title: 'تم تسجيلك مسبقًا في النظام',
-          text: `عزيزي الطالب: ${existingCycle.full_name_ar || studentData.full_name_ar || ''}`,
+          text: `عزيزي الطالب: ${existingCycle.full_name_ar || ''}`,
           seatNumber: existingCycle.seating_number,
           password: ''
         });
         return;
       }
 
-      // الطالب موجود في allow_student ولم يصدر له رقم جلوس في هذه الدورة: نكمل التسجيل.
+      // 2) إذا لم يوجد في students: البحث في allow_student.
+      const { data: studentData, error: studentError } = await supabase
+        .from('allow_student')
+        .select('*')
+        .eq('national_id', enteredNationalId)
+        .maybeSingle();
+
+      if (studentError) throw studentError;
+
+      // 3) إذا لم يوجد في allow_student: رسالة واضحة وإغلاق النموذج عند الضغط على إغلاق.
+      if (!studentData) {
+        setLookupResultModal({
+          type: 'not-found',
+          title: 'لا يوجد لك بيانات بالنظام',
+          text: 'يرجى مراجعة أقرب مديرية تربية وتعليم.'
+        });
+        return;
+      }
+
+      // الطالب موجود في allow_student وغير مسجل في الدورة الحالية: نكمل معه التسجيل.
       setStudent(studentData);
       originalStudentRef.current = { ...studentData };
       setDataConfirmed(false);
@@ -649,7 +632,8 @@ export default function Register({ supabase, onRegisterSuccess, onBack }) {
 
     const original = originalStudentRef.current || {};
     const normalize = (value) => String(value ?? '').trim().replace(/\s+/g, '');
-    // طلبات التعديل تُعرّف الطالب برقم الهوية من allow_student فقط.
+    // كل حقل يُرسل كطلب مستقل حتى يستطيع المسجّل الموافقة عليه أو رفضه منفردًا.
+    // تتضمن المقارنة الحقول النصية ومعرّفات المديرية والمدرسة والفرع.
     const requestableFields = [
       ['full_name_en', 'الاسم بالإنجليزية'],
       ['gender', 'الجنس'],
@@ -659,41 +643,24 @@ export default function Register({ supabase, onRegisterSuccess, onBack }) {
       ['address', 'العنوان'],
       ['phone_number', 'رقم الهاتف'],
       ['whatsapp_number', 'رقم الواتساب'],
+      ['directorate_id', 'معرّف المديرية'],
+      ['directorate_name', 'المديرية'],
+      ['school_id', 'معرّف المدرسة'],
+      ['school_name', 'اسم المدرسة'],
+      ['branch_id', 'معرّف الفرع'],
       ['branch', 'الفرع']
     ];
 
-    const requestNationalId = toEnglishDigits(
-      String(original.national_id || student.national_id || nationalId || '')
-    ).trim();
-
-    if (!/^\d{9}$/.test(requestNationalId)) {
-      showAlert('تعذر تحديد رقم هوية الطالب. أعد البحث برقم الهوية.', 'error');
+    const studentId = Number(original.id ?? student.id);
+    if (!Number.isInteger(studentId) || studentId <= 0) {
+      showAlert('تعذر تحديد سجل الطالب. أعد البحث برقم الهوية.', 'error');
       return;
     }
-
-    // التحقق من وجود رقم الهوية في allow_student دون استخدام أي معرّف رقمي داخلي.
-    const { data: allowStudentRecord, error: allowStudentLookupError } = await supabase
-      .from('allow_student')
-      .select('national_id')
-      .eq('national_id', requestNationalId)
-      .maybeSingle();
-
-    if (allowStudentLookupError) {
-      showAlert(`تعذر التحقق من سجل الطالب: ${allowStudentLookupError.message}`, 'error');
-      return;
-    }
-    if (!allowStudentRecord?.national_id) {
-      showAlert('لم يتم العثور على رقم الهوية في allow_student. أعد البحث برقم الهوية.', 'error');
-      return;
-    }
-
-    // استخدم القيمة المرجعية التي أعادتها قاعدة البيانات نفسها، لا القيمة القادمة من حالة النموذج.
-    const verifiedNationalId = String(allowStudentRecord.national_id).trim();
 
     const changed = requestableFields
       .filter(([field]) => normalize(student[field]) !== normalize(original[field]))
       .map(([field, label]) => ({
-        national_id: verifiedNationalId,
+        student_id: studentId,
         field_name: field,
         current_value: String(original[field] ?? ''),
         requested_value: String(student[field] ?? ''),
@@ -708,11 +675,11 @@ export default function Register({ supabase, onRegisterSuccess, onBack }) {
 
     setRegistering(true);
     try {
-      // منع تكرار طلب الحقل نفسه بالاعتماد على رقم الهوية فقط.
+      // لا نسمح بتكرار طلب الحقل نفسه ما دام هناك طلب مفتوح.
       const { data: openRequests, error: checkError } = await supabase
         .from('student_personal_data_change_requests')
         .select('field_name,status')
-        .eq('national_id', requestNationalId)
+        .eq('student_id', studentId)
         .in('status', ['pending', 'needs_more_info']);
       if (checkError) throw checkError;
 
@@ -722,36 +689,12 @@ export default function Register({ supabase, onRegisterSuccess, onBack }) {
         throw new Error(`يوجد طلب قيد المراجعة مسبقًا للحقل: ${duplicateFields.map((r) => r.reason.replace('طلب تعديل ', '').replace(' مقدم من الطالب', '')).join('، ')}`);
       }
 
-      // تشخيص آمن: لا نطبع رقم الهوية أو القيم الشخصية في Console.
-      console.info('PERSONAL_DATA_REQUEST_DEBUG', {
-        national_id_present: Boolean(verifiedNationalId),
-        national_id_length: verifiedNationalId.length,
-        request_count: changed.length,
-        requests: changed.map(({ field_name, status }) => ({ field_name, status })),
-        all_statuses_pending: changed.every((request) => request.status === 'pending'),
-        all_fields_allowed: changed.every((request) => requestableFields.some(([field]) => field === request.field_name))
-      });
-
       const { error } = await supabase
         .from('student_personal_data_change_requests')
         .insert(changed);
-      if (error) {
-        console.error('PERSONAL_DATA_REQUEST_INSERT_ERROR', {
-          code: error.code,
-          message: error.message,
-          details: error.details,
-          hint: error.hint,
-          request_count: changed.length,
-          field_names: changed.map((request) => request.field_name),
-          national_id_matches_verified_record: changed.every((request) => request.national_id === verifiedNationalId),
-          statuses: changed.map((request) => request.status)
-        });
-        showAlert(`فشل حفظ طلب التعديل (${error.code || 'بدون رمز'}): ${error.message || 'خطأ غير معروف'}`, 'error');
-        throw error;
-      }
+      if (error) throw error;
 
       setEditingStudent(false);
-      setPersonalChangeRequestSent(true);
       setStudent({ ...original });
       setBranchIdNum(original.branch_id ? Number(original.branch_id) : null);
       showAlert(`تم إرسال ${changed.length} طلب تعديل مستقل إلى المسجّل بنجاح. ستبقى بياناتك الأصلية حتى صدور القرار لكل حقل.`, 'success');
@@ -1238,8 +1181,8 @@ export default function Register({ supabase, onRegisterSuccess, onBack }) {
       const personalDescriptor = descriptorResults[0].status === 'fulfilled' ? descriptorResults[0].value : null;
       const identityDescriptor = descriptorResults[1].status === 'fulfilled' ? descriptorResults[1].value : null;
       const faceComparison = personalDescriptor && identityDescriptor
-        ? faceMatch(personalDescriptor, identityDescriptor, 85)
-        : { matched: false, score: null, distance: null, threshold: 85, reason: 'تعذر استخراج بصمة أحد الوجهين؛ يلزم فحص المسجّل.' };
+        ? faceMatch(personalDescriptor, identityDescriptor, 75)
+        : { matched: false, score: null, distance: null, threshold: 75, reason: 'تعذر استخراج بصمة أحد الوجهين؛ يلزم فحص المسجّل.' };
       const needsManualReview = !faceComparison.matched;
       setRegistrationProgress(48);
       setRegistrationStage(needsManualReview ? 'تم تحويل الصور للمراجعة الإدارية...' : 'تمت مطابقة الوجهين، جاري رفع الملفات...');
@@ -1342,8 +1285,8 @@ export default function Register({ supabase, onRegisterSuccess, onBack }) {
             id_face_descriptor: undefined,
             auto_check_note: faceComparison.reason || (faceComparison.score == null
               ? 'تعذر إكمال المطابقة الآلية؛ مطلوب فحص المسجّل.'
-              : `نتيجة المطابقة التشغيلية ${faceComparison.score}% وهي أقل من الحد المطلوب 85%.`),
-            face_match: { matched: false, score: faceComparison.score, distance: faceComparison.distance, threshold: 85 }
+              : `نتيجة المطابقة التشغيلية ${faceComparison.score}% وهي أقل من الحد المطلوب 75%.`),
+            face_match: { matched: false, score: faceComparison.score, distance: faceComparison.distance, threshold: 75 }
           }
         });
         if (reviewInsertError) {
@@ -1619,7 +1562,7 @@ export default function Register({ supabase, onRegisterSuccess, onBack }) {
           <div style={{ backgroundColor: '#1e293b', borderRadius: '12px', boxShadow: '0 10px 15px -3px rgba(0,0,0,0.3)', border: '1px solid #334155', overflow: 'hidden' }}>
             <div style={{ backgroundColor: '#0f172a', color: '#fff', padding: '15px 20px', display: 'flex', justifyContent: 'space-between', alignItems: 'center', fontSize: '16px', fontWeight: 'bold', borderBottom: '1px solid #334155' }}>
               <h2>بيانات الطالب المرشح للاشتراك</h2>
-              <button type="button" onClick={() => handleCheck({ preventDefault: () => {} })} style={{ backgroundColor: '#334155', color: '#fff', border: 'none', padding: '6px 12px', borderRadius: '6px', cursor: 'pointer', fontSize: '12px', fontWeight: 'bold' }}>🔄 تحديث</button>
+              <button onClick={() => { setStudent(null); setDataConfirmed(false); setEditingStudent(false); setRegistrationCompleted(false); }} style={{ backgroundColor: '#334155', color: '#fff', border: 'none', padding: '6px 12px', borderRadius: '6px', cursor: 'pointer', fontSize: '12px', fontWeight: 'bold' }}>بحث عن طالب آخر ↺</button>
             </div>
             
             <div style={{ padding: '25px' }}>
@@ -1680,29 +1623,27 @@ export default function Register({ supabase, onRegisterSuccess, onBack }) {
                     </div>
                   </div>
 
-                  {!personalChangeRequestSent && (
-                    <div style={{ textAlign: 'center', marginBottom: '15px' }}>
-                      <button
-                        type="button"
-                        onClick={() => {
-                          if (!registrationCompleted) setEditingStudent(true);
-                        }}
-                        disabled={registrationCompleted}
-                        style={{
-                          backgroundColor: '#f59e0b',
-                          color: '#fff',
-                          border: 'none',
-                          padding: '10px 24px',
-                          borderRadius: '8px',
-                          fontSize: '14px',
-                          fontWeight: 'bold',
-                          cursor: 'pointer'
-                        }}
-                      >
-                        ✏️ تعديل بيانات الطالب
-                      </button>
-                    </div>
-                  )}
+                  <div style={{ textAlign: 'center', marginBottom: '15px' }}>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        if (!registrationCompleted) setEditingStudent(true);
+                      }}
+                      disabled={registrationCompleted}
+                      style={{
+                        backgroundColor: '#f59e0b',
+                        color: '#fff',
+                        border: 'none',
+                        padding: '10px 24px',
+                        borderRadius: '8px',
+                        fontSize: '14px',
+                        fontWeight: 'bold',
+                        cursor: 'pointer'
+                      }}
+                    >
+                      ✏️ تعديل بيانات الطالب
+                    </button>
+                  </div>
                 </>
               ) : !registrationCompleted && editingStudent ? (
                 <div style={{ marginBottom: '20px' }}>
@@ -1773,17 +1714,19 @@ export default function Register({ supabase, onRegisterSuccess, onBack }) {
                     </div>
 
                     <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
-                      <label style={{ color: '#cbd5e1', fontSize: '12px', fontWeight: 'bold' }}>المديرية (غير قابلة للتعديل):</label>
-                      <div aria-readonly="true" style={{ width: '100%', boxSizing: 'border-box', padding: '9px 8px', borderRadius: '8px', border: '1px solid rgba(167,139,250,0.35)', backgroundColor: '#334155', color: '#cbd5e1', fontSize: '13px', textAlign: 'right', direction: 'rtl', minHeight: '38px' }}>
-                        {student.directorate_name || 'غير متوفر'}
-                      </div>
+                      <label style={{ color: '#cbd5e1', fontSize: '12px', fontWeight: 'bold' }}>المديرية:</label>
+                      <select value={student.directorate_id || getDirectorateId(student.directorate_name) || ''} onChange={handleDirectorateSelection} disabled={registering} style={{ width: '100%', boxSizing: 'border-box', padding: '9px 8px', borderRadius: '8px', border: '1px solid rgba(167,139,250,0.65)', backgroundColor: '#0f172a', color: '#fff', fontSize: '13px', textAlign: 'right', direction: 'rtl' }}>
+                        <option value="">-- اختر المديرية --</option>
+                        {directoratesList.map((d) => <option key={d.id} value={d.id}>{getDirectorateLabel(d)}</option>)}
+                      </select>
                     </div>
 
                     <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
-                      <label style={{ color: '#cbd5e1', fontSize: '12px', fontWeight: 'bold' }}>اسم المدرسة (غير قابل للتعديل):</label>
-                      <div aria-readonly="true" style={{ width: '100%', boxSizing: 'border-box', padding: '10px', borderRadius: '8px', border: '1px solid rgba(167,139,250,0.35)', backgroundColor: '#334155', color: '#cbd5e1', fontSize: '14px', textAlign: 'right', direction: 'rtl', minHeight: '40px' }}>
-                        {student.school_name || 'غير متوفر'}
-                      </div>
+                      <label style={{ color: '#cbd5e1', fontSize: '12px', fontWeight: 'bold' }}>اسم المدرسة:</label>
+                      <select value={student.school_id || ''} onChange={handleSchoolSelection} disabled={registering || !student.directorate_id} style={{ width: '100%', boxSizing: 'border-box', padding: '10px', borderRadius: '8px', border: '1px solid rgba(167,139,250,0.65)', backgroundColor: '#0f172a', color: '#fff', fontSize: '14px', textAlign: 'right', direction: 'rtl' }}>
+                        <option value="">-- اختر المدرسة --</option>
+                        {schoolsList.map((school) => <option key={school.id} value={school.id}>{getSchoolLabel(school)}</option>)}
+                      </select>
                     </div>
 
                     <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>

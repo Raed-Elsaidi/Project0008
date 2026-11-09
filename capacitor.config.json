@@ -1,5 +1,8 @@
 {
-  "appId": "com.studentportal.app",
-  "appName": "Student Portal",
-  "webDir": "dist"
+  "appId": "com.tawjihi.examportal",
+  "appName": "Tawjihi Exam Portal",
+  "webDir": "dist",
+  "server": {
+    "androidScheme": "https"
+  }
 }
